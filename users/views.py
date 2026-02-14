@@ -5,7 +5,8 @@ from rest_framework.response import Response
 
 from .models import CustomUser
 from .serializers import UserSerializer, UserCreateSerializer
-
+from django.http import JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = CustomUser.objects.all()
@@ -26,3 +27,9 @@ class UserViewSet(viewsets.ModelViewSet):
         """Get current authenticated user."""
         serializer = self.get_serializer(request.user)
         return Response(serializer.data)
+
+
+@ensure_csrf_cookie
+def csrf(request):
+    # Solo fuerza a que Django setee la cookie csrftoken
+    return JsonResponse({"detail": "CSRF cookie set"})

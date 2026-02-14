@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask
+from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask, EventAttachment
 
 
 @admin.register(TaskCatalog)
@@ -28,3 +28,11 @@ class MaintenanceTaskAdmin(admin.ModelAdmin):
     search_fields = ['vehicle__brand', 'vehicle__model', 'task_code', 'explanation']
     ordering = ['status', 'priority', 'due_date']
     raw_id_fields = ['vehicle', 'completed_event']
+
+
+@admin.register(EventAttachment)
+class EventAttachmentAdmin(admin.ModelAdmin):
+    list_display = ['original_filename', 'file_type', 'event', 'uploaded_at']
+    list_filter = ['file_type']
+    search_fields = ['original_filename']
+    raw_id_fields = ['event']

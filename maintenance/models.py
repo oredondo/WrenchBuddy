@@ -49,7 +49,7 @@ class MaintenanceEvent(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-
+    
     class Meta:
         db_table = 'maintenance_events'
         verbose_name = 'Evento de mantenimiento'
@@ -111,3 +111,36 @@ class MaintenanceTask(models.Model):
 
     def __str__(self):
         return f"{self.task_code} - {self.vehicle} ({self.status})"
+
+
+def event_attachment_path(instance, filename):
+    """Generate upload path: attachments/user_<id>/event_<id>/<filename>"""
+    user_id = instance.event.vehicle.user_id
+    return f'attachments/user_{user_id}/event_{instance.event_id}/{filename}'
+
+
+class EventAttachment(models.Model):
+    """Attachments (invoices, photos) linked to a MaintenanceEvent."""
+
+    class FileType(models.TextChoices):
+        PDF = 'pdf', 'PDF'
+        IMAGE = 'image', 'Imagen'
+
+    event = models.ForeignKey(
+        MaintenanceEvent,
+        on_delete=models.CASCADE,
+        related_name='attachments'
+    )
+    file = models.FileField(upload_to=event_attachment_path)
+    file_type = models.CharField(max_length=10, choices=FileType.choices)
+    original_filename = models.CharField(max_length=255)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'event_attachments'
+        verbose_name = 'Adjunto de evento'
+        verbose_name_plural = 'Adjuntos de eventos'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.original_filename} ({self.event})"

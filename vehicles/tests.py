@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import Mock
 from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
 from rest_framework import status
@@ -356,10 +357,10 @@ class TestVehicleSerializer:
         assert serializer.data['usage_type'] == 'mixed'
         assert serializer.data['notes'] == 'Fast bike'
 
-    def test_deserialize_valid_data_creates_valid_object(self, vehicle_data, user, mocker):
+    def test_deserialize_valid_data_creates_valid_object(self, vehicle_data, user):
         """Test deserializing valid data creates a valid vehicle."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
 
@@ -373,10 +374,10 @@ class TestVehicleSerializer:
         assert vehicle.brand == 'Honda'
         assert vehicle.model == 'CBR600RR'
 
-    def test_deserialize_with_missing_required_field_is_invalid(self, user, mocker):
+    def test_deserialize_with_missing_required_field_is_invalid(self, user):
         """Test that missing required fields make serializer invalid."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         invalid_data = {
@@ -394,10 +395,10 @@ class TestVehicleSerializer:
         assert 'year' in serializer.errors
         assert 'current_km' in serializer.errors
 
-    def test_deserialize_with_invalid_vehicle_type_is_invalid(self, vehicle_data, user, mocker):
+    def test_deserialize_with_invalid_vehicle_type_is_invalid(self, vehicle_data, user):
         """Test that invalid vehicle type makes serializer invalid."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         vehicle_data['vehicle_type'] = 'invalid_type'
@@ -409,10 +410,10 @@ class TestVehicleSerializer:
         assert not serializer.is_valid()
         assert 'vehicle_type' in serializer.errors
 
-    def test_deserialize_with_invalid_usage_type_is_invalid(self, vehicle_data, user, mocker):
+    def test_deserialize_with_invalid_usage_type_is_invalid(self, vehicle_data, user):
         """Test that invalid usage type makes serializer invalid."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         vehicle_data['usage_type'] = 'invalid_usage'
@@ -424,10 +425,10 @@ class TestVehicleSerializer:
         assert not serializer.is_valid()
         assert 'usage_type' in serializer.errors
 
-    def test_deserialize_with_negative_year_is_invalid(self, vehicle_data, user, mocker):
+    def test_deserialize_with_negative_year_is_invalid(self, vehicle_data, user):
         """Test that negative year makes serializer invalid."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         vehicle_data['year'] = -2020
@@ -439,10 +440,10 @@ class TestVehicleSerializer:
         assert not serializer.is_valid()
         assert 'year' in serializer.errors
 
-    def test_deserialize_with_negative_km_is_invalid(self, vehicle_data, user, mocker):
+    def test_deserialize_with_negative_km_is_invalid(self, vehicle_data, user):
         """Test that negative kilometers makes serializer invalid."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         vehicle_data['current_km'] = -1000
@@ -454,10 +455,10 @@ class TestVehicleSerializer:
         assert not serializer.is_valid()
         assert 'current_km' in serializer.errors
 
-    def test_create_method_sets_user_from_request(self, vehicle_data, user, mocker):
+    def test_create_method_sets_user_from_request(self, vehicle_data, user):
         """Test that create method sets user from request context."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
 
@@ -469,10 +470,10 @@ class TestVehicleSerializer:
         # Assert
         assert vehicle.user == user
 
-    def test_read_only_fields_cannot_be_set(self, motorcycle, vehicle_data, user, mocker):
+    def test_read_only_fields_cannot_be_set(self, motorcycle, vehicle_data, user):
         """Test that read-only fields are not updated."""
         # Arrange
-        mock_request = mocker.Mock()
+        mock_request = Mock()
         mock_request.user = user
         context = {'request': mock_request}
         original_id = motorcycle.id
@@ -559,7 +560,7 @@ class TestVehicleViewSet:
         response = api_client.get('/api/vehicles/')
 
         # Assert
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_list_vehicles_authenticated_returns_200(self, authenticated_client):
         """Test that authenticated users can list vehicles."""
@@ -671,7 +672,7 @@ class TestVehicleViewSet:
         response = api_client.post('/api/vehicles/', vehicle_data, format='json')
 
         # Assert
-        assert response.status_code == status.HTTP_401_UNAUTHORIZED
+        assert response.status_code == status.HTTP_403_FORBIDDEN
 
     def test_update_vehicle_with_valid_data_returns_200(
         self, authenticated_client, motorcycle

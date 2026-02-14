@@ -3,13 +3,14 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask
+from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask, EventAttachment
 from .serializers import (
     TaskCatalogSerializer,
     MaintenanceEventSerializer,
     MaintenanceEventCreateSerializer,
     MaintenanceTaskSerializer,
     MaintenanceTaskCompleteSerializer,
+    EventAttachmentSerializer,
 )
 
 
@@ -101,3 +102,18 @@ class MaintenanceTaskViewSet(viewsets.ModelViewSet):
             MaintenanceTaskSerializer(task).data,
             status=status.HTTP_200_OK
         )
+
+
+class EventAttachmentViewSet(viewsets.ModelViewSet):
+    """CRUD for event attachments (invoices, photos)."""
+    serializer_class = EventAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = EventAttachment.objects.filter(
+            event__vehicle__user=self.request.user
+        )
+        event_id = self.request.query_params.get('event')
+        if event_id:
+            queryset = queryset.filter(event_id=event_id)
+        return queryset

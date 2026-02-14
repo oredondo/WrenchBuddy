@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask
+from .models import TaskCatalog, MaintenanceEvent, MaintenanceTask, EventAttachment
 
 
 class TaskCatalogSerializer(serializers.ModelSerializer):
@@ -56,6 +56,36 @@ class MaintenanceTaskSerializer(serializers.ModelSerializer):
     def get_task_name(self, obj):
         task = TaskCatalog.objects.filter(task_code=obj.task_code).first()
         return task.name if task else obj.task_code
+
+
+class EventAttachmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventAttachment
+        fields = ['id', 'event', 'file', 'file_type', 'original_filename', 'uploaded_at']
+        read_only_fields = ['id', 'file_type', 'original_filename', 'uploaded_at']
+
+    def validate_file(self, value):
+        # Validate file type
+        allowed_types = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp']
+        if value.content_type not in allowed_types:
+            raise serializers.ValidationError(
+                "Tipo de archivo no permitido. Solo PDF, PNG, JPEG o WebP."
+            )
+        # Limit file size to 10MB
+        max_size = 10 * 1024 * 1024
+        if value.size > max_size:
+            raise serializers.ValidationError("El archivo no puede superar 10MB.")
+        return value
+
+    def create(self, validated_data):
+        file = validated_data['file']
+        # Determine file_type from content_type
+        if file.content_type == 'application/pdf':
+            validated_data['file_type'] = EventAttachment.FileType.PDF
+        else:
+            validated_data['file_type'] = EventAttachment.FileType.IMAGE
+        validated_data['original_filename'] = file.name
+        return super().create(validated_data)
 
 
 class MaintenanceTaskCompleteSerializer(serializers.Serializer):

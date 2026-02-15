@@ -61,8 +61,14 @@ class MaintenanceTaskSerializer(serializers.ModelSerializer):
 class EventAttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = EventAttachment
-        fields = ['id', 'event', 'file', 'file_type', 'original_filename', 'uploaded_at']
-        read_only_fields = ['id', 'file_type', 'original_filename', 'uploaded_at']
+        fields = [
+            'id', 'event', 'file', 'file_type', 'original_filename', 'uploaded_at',
+            'analysis_status', 'analysis_result',
+        ]
+        read_only_fields = [
+            'id', 'file_type', 'original_filename', 'uploaded_at',
+            'analysis_status', 'analysis_result',
+        ]
 
     def validate_file(self, value):
         # Validate file type

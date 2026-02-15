@@ -117,3 +117,8 @@ class EventAttachmentViewSet(viewsets.ModelViewSet):
         if event_id:
             queryset = queryset.filter(event_id=event_id)
         return queryset
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        from ai_assistant.tasks import analyze_attachment
+        analyze_attachment.delay(instance.id)

@@ -126,6 +126,12 @@ class EventAttachment(models.Model):
         PDF = 'pdf', 'PDF'
         IMAGE = 'image', 'Imagen'
 
+    class AnalysisStatus(models.TextChoices):
+        PENDING = 'pending', 'Pendiente'
+        PROCESSING = 'processing', 'Procesando'
+        COMPLETED = 'completed', 'Completado'
+        FAILED = 'failed', 'Fallido'
+
     event = models.ForeignKey(
         MaintenanceEvent,
         on_delete=models.CASCADE,
@@ -135,6 +141,13 @@ class EventAttachment(models.Model):
     file_type = models.CharField(max_length=10, choices=FileType.choices)
     original_filename = models.CharField(max_length=255)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    analysis_status = models.CharField(
+        max_length=20,
+        choices=AnalysisStatus.choices,
+        default=AnalysisStatus.PENDING,
+    )
+    analysis_result = models.TextField(blank=True, null=True)
+    analysis_error = models.TextField(blank=True, null=True)
 
     class Meta:
         db_table = 'event_attachments'

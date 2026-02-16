@@ -158,8 +158,12 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
-# Ollama (IA local)
-OLLAMA_BASE_URL = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+# Open WebUI (IA)
+OPENWEBUI_BASE_URL = os.environ.get('OPENWEBUI_BASE_URL', 'https://leria.gal')
+OPENWEBUI_EMAIL = os.environ.get('OPENWEBUI_EMAIL', '')
+OPENWEBUI_PASSWORD = os.environ.get('OPENWEBUI_PASSWORD', '')
+OPENWEBUI_TEXT_MODEL = os.environ.get('OPENWEBUI_TEXT_MODEL', 'leria:redacta')
+OPENWEBUI_VISION_MODEL = os.environ.get('OPENWEBUI_VISION_MODEL', 'leria:redacta')
 
 # Django REST Framework
 REST_FRAMEWORK = {

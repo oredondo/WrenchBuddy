@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/users/', include('users.urls')),
     path('api/vehicles/', include('vehicles.urls')),
     path('api/maintenance/', include('maintenance.urls')),
+    path('api/ai/', include('ai_assistant.urls')),
     path('api-auth/', include('rest_framework.urls')),
     path("api/csrf/", csrf),
 ]

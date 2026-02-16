@@ -9,16 +9,23 @@ from ai_assistant.ollama_client import generate_text, analyze_image as ollama_an
 logger = logging.getLogger(__name__)
 
 ANALYSIS_PROMPT = (
-    "Analiza este documento de mantenimiento de vehículo. "
-    "Extrae la siguiente información si está disponible:\n"
-    "- Tipo de servicio realizado\n"
-    "- Coste total\n"
-    "- Fecha del servicio\n"
-    "- Nombre del taller\n"
-    "- Piezas reemplazadas o utilizadas\n"
-    "- Observaciones o notas relevantes\n\n"
-    "Responde en formato estructurado. Si algún dato no está disponible, "
-    "indica 'No disponible'."
+    "Analyze this vehicle maintenance document. "
+    "Extract the information and respond ONLY with valid JSON (no additional text) "
+    "using this structure:\n\n"
+    "{\n"
+    '  "tipo_servicio": "Description of the service performed",\n'
+    '  "task_codes": ["oil_change"],\n'
+    '  "km": 15000,\n'
+    '  "coste_total": 75.50,\n'
+    '  "fecha": "2026-01-15",\n'
+    '  "taller": "Workshop name",\n'
+    '  "piezas": ["Oil filter", "10W40 oil 4L"],\n'
+    '  "observaciones": "Relevant notes"\n'
+    "}\n\n"
+    "Valid task_codes: oil_change, chain_service, tire_check, brake_check, "
+    "coolant_change, spark_plugs, air_filter, itv.\n"
+    "You may include multiple task_codes if the document reflects multiple services.\n"
+    "If any data is not available, use \"No disponible\" for text fields or null for numbers."
 )
 
 
@@ -54,6 +61,13 @@ def analyze_attachment(self, attachment_id: int):
             analysis_error=None,
         )
         logger.info("Attachment %s analyzed successfully", attachment_id)
+
+        from ai_assistant.signals import attachment_analysis_completed
+        attachment_analysis_completed.send(
+            sender=analyze_attachment,
+            attachment_id=attachment_id,
+            analysis_result=result,
+        )
 
     except Exception as exc:
         _update_attachment(

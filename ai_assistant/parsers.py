@@ -191,6 +191,84 @@ def _parse_date(raw: str) -> Optional[date]:
     return None
 
 
+def _try_extract_json(text: str) -> Optional[list]:
+    """Try to extract a JSON array from text that may contain surrounding prose."""
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+
+def parse_catalog_items(raw_text: str) -> list[dict]:
+    """Parse AI-generated catalog items from raw text.
+
+    Returns a list of dicts with keys: task_code, name, description,
+    interval_km, interval_months, is_safety_critical.
+    """
+    cleaned = _clean_json_text(raw_text)
+
+    # Try direct JSON array parse
+    data = None
+    try:
+        data = json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Try extracting embedded JSON array
+    if data is None:
+        data = _try_extract_json(cleaned)
+
+    if not isinstance(data, list):
+        return []
+
+    items = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        task_code = entry.get('task_code')
+        if not isinstance(task_code, str) or not task_code.strip():
+            continue
+
+        name = entry.get('name', task_code)
+        if not isinstance(name, str):
+            name = task_code
+
+        description = entry.get('description', '')
+        if not isinstance(description, str):
+            description = ''
+
+        raw_km = entry.get('interval_km')
+        interval_km = None
+        if raw_km is not None:
+            try:
+                interval_km = int(raw_km)
+            except (ValueError, TypeError):
+                pass
+
+        raw_months = entry.get('interval_months')
+        interval_months = None
+        if raw_months is not None:
+            try:
+                interval_months = int(raw_months)
+            except (ValueError, TypeError):
+                pass
+
+        is_safety_critical = bool(entry.get('is_safety_critical', False))
+
+        items.append({
+            'task_code': task_code.strip(),
+            'name': name.strip(),
+            'description': description.strip(),
+            'interval_km': interval_km,
+            'interval_months': interval_months,
+            'is_safety_critical': is_safety_critical,
+        })
+    return items
+
+
 def _parse_cost(raw: str) -> Optional[Decimal]:
     """Parse cost string to Decimal."""
     raw = raw.strip()

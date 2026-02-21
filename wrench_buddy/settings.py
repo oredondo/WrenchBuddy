@@ -102,8 +102,12 @@ WSGI_APPLICATION = 'wrench_buddy.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ.get('DB_NAME', 'wrenchbuddy'),
+        'USER': os.environ.get('DB_USER', 'wrenchbuddy'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '5432'),
     }
 }
 
@@ -162,7 +166,7 @@ CELERY_RESULT_SERIALIZER = 'json'
 OPENWEBUI_BASE_URL = os.environ.get('OPENWEBUI_BASE_URL', 'https://leria.gal')
 OPENWEBUI_EMAIL = os.environ.get('OPENWEBUI_EMAIL', '')
 OPENWEBUI_PASSWORD = os.environ.get('OPENWEBUI_PASSWORD', '')
-OPENWEBUI_TEXT_MODEL = os.environ.get('OPENWEBUI_TEXT_MODEL', 'leria:redacta')
+OPENWEBUI_TEXT_MODEL = os.environ.get('OPENWEBUI_TEXT_MODEL', 'leria:desenvolve')
 OPENWEBUI_VISION_MODEL = os.environ.get('OPENWEBUI_VISION_MODEL', 'leria:redacta')
 
 # Django REST Framework

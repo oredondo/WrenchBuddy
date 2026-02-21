@@ -2,7 +2,7 @@ from datetime import date
 
 from django.db.models import Max
 
-from maintenance.models import TaskCatalog, MaintenanceEvent, MaintenanceTask
+from maintenance.models import TaskCatalog, MaintenanceEvent
 from vehicles.models import Vehicle
 
 
@@ -10,7 +10,7 @@ def build_vehicle_context(vehicle_id: int) -> dict:
     """Build complete vehicle context for AI recommendation prompts.
 
     Returns a dict with vehicle_info, catalog entries, last events per task_code,
-    pending tasks, and a full_prompt_context string ready for injection.
+    community context, and a full_prompt_context string ready for injection.
     """
     vehicle = Vehicle.objects.get(id=vehicle_id)
 
@@ -24,34 +24,35 @@ def build_vehicle_context(vehicle_id: int) -> dict:
         'vehicle_type': vehicle.vehicle_type,
     }
 
-    # Catalog filtered by vehicle type
+    # Catalog for this specific vehicle
     catalog_entries = list(
-        TaskCatalog.objects.filter(vehicle_type=vehicle.vehicle_type)
-        .values('task_code', 'name', 'default_interval_km', 'default_interval_months', 'is_safety_critical')
+        TaskCatalog.objects.filter(vehicle=vehicle)
+        .values('task_code', 'name', 'interval_km', 'interval_months', 'is_safety_critical')
     )
 
     catalog_text = _format_catalog(catalog_entries)
 
+    # Community context: tasks from other vehicles of same brand+model
+    community_entries = list(
+        TaskCatalog.objects
+        .filter(vehicle__brand__iexact=vehicle.brand, vehicle__model__iexact=vehicle.model)
+        .exclude(vehicle_id=vehicle_id)
+        .values('task_code', 'name', 'interval_km', 'interval_months', 'is_safety_critical')[:50]
+    )
+    community_text = _format_catalog(community_entries)
+
     # Last event per task_code
     last_events = _get_last_events(vehicle, vehicle_info['current_km'])
 
-    # Pending tasks
-    pending_tasks = list(
-        MaintenanceTask.objects.filter(vehicle=vehicle, status=MaintenanceTask.Status.PENDING)
-        .values('task_code', 'priority', 'due_km', 'due_date', 'explanation')
-    )
-
-    pending_tasks_text = _format_pending_tasks(pending_tasks)
-
-    full_prompt_context = _build_full_context(vehicle_info, catalog_text, last_events, pending_tasks_text)
+    full_prompt_context = _build_full_context(vehicle_info, catalog_text, last_events, community_text)
 
     return {
         'vehicle_info': vehicle_info,
         'catalog_entries': catalog_entries,
         'catalog_text': catalog_text,
+        'community_entries': community_entries,
+        'community_text': community_text,
         'last_events': last_events,
-        'pending_tasks': pending_tasks,
-        'pending_tasks_text': pending_tasks_text,
         'full_prompt_context': full_prompt_context,
     }
 
@@ -62,10 +63,10 @@ def _format_catalog(entries: list[dict]) -> str:
     lines = []
     for e in entries:
         interval = []
-        if e['default_interval_km']:
-            interval.append(f"every {e['default_interval_km']} km")
-        if e['default_interval_months']:
-            interval.append(f"every {e['default_interval_months']} months")
+        if e['interval_km']:
+            interval.append(f"every {e['interval_km']} km")
+        if e['interval_months']:
+            interval.append(f"every {e['interval_months']} months")
         safety = ' [SAFETY CRITICAL]' if e['is_safety_critical'] else ''
         lines.append(f"- {e['task_code']} ({e['name']}): {', '.join(interval) or 'no default interval'}{safety}")
     return '\n'.join(lines)
@@ -103,21 +104,12 @@ def _get_last_events(vehicle: Vehicle, current_km: int) -> list[dict]:
     return result
 
 
-def _format_pending_tasks(tasks: list[dict]) -> str:
-    if not tasks:
-        return 'No pending AI tasks.'
-    lines = []
-    for t in tasks:
-        parts = [f"- {t['task_code']} (priority: {t['priority']})"]
-        if t['due_km']:
-            parts.append(f"due at {t['due_km']} km")
-        if t['due_date']:
-            parts.append(f"due by {t['due_date']}")
-        lines.append(', '.join(parts))
-    return '\n'.join(lines)
-
-
-def _build_full_context(vehicle_info: dict, catalog_text: str, last_events: list[dict], pending_tasks_text: str) -> str:
+def _build_full_context(
+    vehicle_info: dict,
+    catalog_text: str,
+    last_events: list[dict],
+    community_text: str = '',
+) -> str:
     events_text = 'No maintenance history recorded.'
     if last_events:
         lines = []
@@ -130,6 +122,10 @@ def _build_full_context(vehicle_info: dict, catalog_text: str, last_events: list
 
     displacement = f", {vehicle_info['displacement']}cc" if vehicle_info['displacement'] else ''
 
+    community_section = ''
+    if community_text and community_text != 'No catalog entries available.':
+        community_section = f"\n\n=== COMMUNITY CONTEXT ===\n{community_text}"
+
     return f"""=== VEHICLE ===
 {vehicle_info['brand']} {vehicle_info['model']} ({vehicle_info['year']}){displacement}
 Type: {vehicle_info['vehicle_type']}, Usage: {vehicle_info['usage_type']}
@@ -139,7 +135,4 @@ Current odometer: {vehicle_info['current_km']} km
 {catalog_text}
 
 === LAST MAINTENANCE PER TASK ===
-{events_text}
-
-=== CURRENT PENDING TASKS ===
-{pending_tasks_text}"""
+{events_text}{community_section}"""

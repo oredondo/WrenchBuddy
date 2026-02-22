@@ -52,14 +52,17 @@ def build_recommendation_prompt(context_text: str) -> str:
     return f"{RECOMMENDATION_SYSTEM_PROMPT}\n\n{context_text}"
 
 
-def parse_recommendations(raw_text: str) -> list[RecommendationItem]:
-    """Parse AI response into RecommendationItems. Tries JSON first, then regex fallback."""
-    items = _try_parse_json(raw_text)
+def parse_recommendations(raw_text: str, valid_codes: set[str] | None = None) -> list[RecommendationItem]:
+    """Parse AI response into RecommendationItems. Tries JSON first, then regex fallback.
+
+    valid_codes: if provided, only items whose task_code is in this set are kept.
+                 If None, falls back to the hardcoded VALID_TASK_CODES.
+    """
+    items = _try_parse_json(raw_text, valid_codes)
     if items is not None:
         return items
 
-    # Fallback: try to extract JSON array embedded in text
-    items = _try_extract_json(raw_text)
+    items = _try_extract_json(raw_text, valid_codes)
     if items is not None:
         return items
 
@@ -73,7 +76,7 @@ def _clean_json_text(text: str) -> str:
     return text.strip()
 
 
-def _try_parse_json(text: str) -> Optional[list[RecommendationItem]]:
+def _try_parse_json(text: str, valid_codes: set[str] | None) -> Optional[list[RecommendationItem]]:
     cleaned = _clean_json_text(text)
     try:
         data = json.loads(cleaned)
@@ -86,10 +89,10 @@ def _try_parse_json(text: str) -> Optional[list[RecommendationItem]]:
     if not isinstance(data, list):
         return None
 
-    return _parse_items(data)
+    return _parse_items(data, valid_codes)
 
 
-def _try_extract_json(text: str) -> Optional[list[RecommendationItem]]:
+def _try_extract_json(text: str, valid_codes: set[str] | None) -> Optional[list[RecommendationItem]]:
     """Try to find a JSON array embedded in text."""
     match = re.search(r'\[[\s\S]*\]', text)
     if not match:
@@ -100,20 +103,21 @@ def _try_extract_json(text: str) -> Optional[list[RecommendationItem]]:
         return None
     if not isinstance(data, list):
         return None
-    return _parse_items(data)
+    return _parse_items(data, valid_codes)
 
 
 VALID_PRIORITIES = {'high', 'medium', 'low'}
 
 
-def _parse_items(data: list) -> list[RecommendationItem]:
+def _parse_items(data: list, valid_codes: set[str] | None) -> list[RecommendationItem]:
+    allowed = valid_codes if valid_codes is not None else VALID_TASK_CODES
     items = []
     for entry in data:
         if not isinstance(entry, dict):
             continue
 
         task_code = entry.get('task_code', '')
-        if task_code not in VALID_TASK_CODES:
+        if task_code not in allowed:
             continue
 
         priority = entry.get('priority', 'medium')

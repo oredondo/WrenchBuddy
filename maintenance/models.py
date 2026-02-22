@@ -65,6 +65,30 @@ class MaintenanceEvent(models.Model):
         return f"{self.task_code} - {self.vehicle} ({self.date})"
 
 
+class Accessory(models.Model):
+    """Accessories and modifications installed on a vehicle."""
+
+    vehicle = models.ForeignKey(
+        Vehicle,
+        on_delete=models.CASCADE,
+        related_name='accessories',
+    )
+    name = models.CharField(max_length=200)
+    price = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'accessories'
+        verbose_name = 'Accesorio'
+        verbose_name_plural = 'Accesorios'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.name} ({self.vehicle})"
+
+
 def event_attachment_path(instance, filename):
     """Generate upload path: attachments/user_<id>/event_<id>/<filename>"""
     user_id = instance.event.vehicle.user_id

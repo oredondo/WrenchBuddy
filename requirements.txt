@@ -16,6 +16,7 @@ idna==3.11
 kombu==5.6.2
 prompt-toolkit==3.0.52
 PyPDF2==3.0.1
+reportlab==4.4.10
 python-dateutil==2.9.0.post0
 redis==5.2.1
 requests==2.32.3

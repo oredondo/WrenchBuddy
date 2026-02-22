@@ -1,11 +1,41 @@
 import base64
 import logging
 import threading
+from datetime import datetime
+from pathlib import Path
 
 import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+_log_lock = threading.Lock()
+
+
+def _get_log_path() -> Path:
+    return Path(settings.BASE_DIR) / 'logs' / 'ai_prompts.log'
+
+
+def _log_interaction(call_type: str, model: str, prompt: str, response: str):
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    separator = '=' * 80
+    entry = (
+        f"\n{separator}\n"
+        f"[{timestamp}] {call_type.upper()} · model={model}\n"
+        f"{'-' * 40} PROMPT {'-' * 33}\n"
+        f"{prompt}\n"
+        f"{'-' * 40} RESPONSE {'-' * 31}\n"
+        f"{response}\n"
+        f"{separator}\n"
+    )
+    try:
+        log_path = _get_log_path()
+        log_path.parent.mkdir(exist_ok=True)
+        with _log_lock:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(entry)
+    except Exception:
+        logger.exception("Failed to write AI prompt log")
 
 DEFAULT_TIMEOUT = 300
 
@@ -92,7 +122,9 @@ def generate_text(prompt: str, model: str = None) -> str:
         ],
     }
     response = _post_with_retry(url, payload)
-    return response.json()['choices'][0]['message']['content']
+    result = response.json()['choices'][0]['message']['content']
+    _log_interaction('text', model, prompt, result)
+    return result
 
 
 def analyze_image(image_base64: str, prompt: str, model: str = None) -> str:
@@ -119,4 +151,6 @@ def analyze_image(image_base64: str, prompt: str, model: str = None) -> str:
         ],
     }
     response = _post_with_retry(url, payload)
-    return response.json()['choices'][0]['message']['content']
+    result = response.json()['choices'][0]['message']['content']
+    _log_interaction('image', model, prompt, result)
+    return result

@@ -1,12 +1,13 @@
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 
-from .models import TaskCatalog, MaintenanceEvent, EventAttachment
+from .models import TaskCatalog, MaintenanceEvent, EventAttachment, Accessory
 from .serializers import (
     TaskCatalogSerializer,
     MaintenanceEventSerializer,
     MaintenanceEventCreateSerializer,
     EventAttachmentSerializer,
+    AccessorySerializer,
 )
 
 
@@ -62,3 +63,16 @@ class EventAttachmentViewSet(viewsets.ModelViewSet):
         instance = serializer.save()
         from ai_assistant.tasks import analyze_attachment
         analyze_attachment.delay(instance.id)
+
+
+class AccessoryViewSet(viewsets.ModelViewSet):
+    """CRUD for vehicle accessories and modifications."""
+    serializer_class = AccessorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = Accessory.objects.filter(vehicle__user=self.request.user)
+        vehicle_id = self.request.query_params.get('vehicle')
+        if vehicle_id:
+            queryset = queryset.filter(vehicle_id=vehicle_id)
+        return queryset

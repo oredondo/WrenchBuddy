@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import TaskCatalog, MaintenanceEvent, EventAttachment
+from .models import TaskCatalog, MaintenanceEvent, EventAttachment, Accessory
 
 
 class TaskCatalogSerializer(serializers.ModelSerializer):
@@ -80,3 +80,15 @@ class EventAttachmentSerializer(serializers.ModelSerializer):
             validated_data['file_type'] = EventAttachment.FileType.IMAGE
         validated_data['original_filename'] = file.name
         return super().create(validated_data)
+
+
+class AccessorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Accessory
+        fields = ['id', 'vehicle', 'name', 'price', 'notes', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate_vehicle(self, value):
+        if value.user != self.context['request'].user:
+            raise serializers.ValidationError("No tienes permiso para este vehículo.")
+        return value

@@ -103,19 +103,36 @@ def generate_vehicle_pdf(vehicle, events, accessories) -> bytes:
     # ── Historial de mantenimiento ────────────────────────────────────────────
     story.append(Paragraph("Historial de mantenimiento", s['section']))
     if events:
-        rows = [['Fecha', 'Tarea', 'Km', 'Coste', 'Notas']]
+        col_w = [page_w * r for r in [0.16, 0.38, 0.18, 0.28]]
+        rows = [['Fecha', 'Tarea', 'Km', 'Coste']]
+        span_cmds = []
+        row_idx = 1
         for ev in events:
-            task_name = ev.task_code
             rows.append([
                 ev.date.strftime('%d/%m/%Y'),
-                Paragraph(task_name, s['normal']),
+                Paragraph(ev.task_code, s['normal']),
                 f"{ev.km_at_service:,}",
                 f"{ev.cost} €" if ev.cost else '—',
-                Paragraph(ev.notes or '—', s['muted']),
             ])
-        col_w = [page_w * r for r in [0.14, 0.26, 0.13, 0.12, 0.35]]
+            row_idx += 1
+            if ev.notes and ev.notes.strip():
+                note_text = f"<i>{ev.notes.strip()}</i>"
+                rows.append([Paragraph(note_text, s['muted']), '', '', ''])
+                span_cmds += [
+                    ('SPAN',           (0, row_idx), (3, row_idx)),
+                    ('BACKGROUND',     (0, row_idx), (3, row_idx), colors.white),
+                    ('LEFTPADDING',    (0, row_idx), (3, row_idx), 14),
+                    ('TOPPADDING',     (0, row_idx), (3, row_idx), 2),
+                    ('BOTTOMPADDING',  (0, row_idx), (3, row_idx), 4),
+                    ('LINEBELOW',      (0, row_idx), (3, row_idx), 0.4, BORDER),
+                ]
+                row_idx += 1
+
+        ts = _table_style()
+        for cmd in span_cmds:
+            ts.add(*cmd)
         t = Table(rows, colWidths=col_w)
-        t.setStyle(_table_style())
+        t.setStyle(ts)
         story.append(t)
 
         total_cost = sum(float(ev.cost) for ev in events if ev.cost)

@@ -44,6 +44,32 @@ class MaintenanceEventViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(vehicle_id=vehicle_id)
         return queryset
 
+    def perform_create(self, serializer):
+        import re
+        event = serializer.save()
+        task_code = event.task_code
+        if not task_code or task_code == 'pending_analysis':
+            return
+        in_catalog = TaskCatalog.objects.filter(
+            vehicle=event.vehicle, task_code=task_code
+        ).exists()
+        if in_catalog:
+            return
+        # Already normalized (lowercase ASCII snake_case) → add to catalog directly
+        if re.fullmatch(r'[a-z][a-z0-9_]*', task_code):
+            TaskCatalog.objects.get_or_create(
+                vehicle=event.vehicle,
+                task_code=task_code,
+                defaults={
+                    'name': task_code.replace('_', ' ').title(),
+                    'source': TaskCatalog.Source.USER_CREATED,
+                },
+            )
+        else:
+            # Free text / non-normalized → let AI translate and normalize
+            from ai_assistant.tasks import normalize_task_code
+            normalize_task_code.delay(event.id)
+
 
 class EventAttachmentViewSet(viewsets.ModelViewSet):
     """CRUD for event attachments (invoices, photos)."""

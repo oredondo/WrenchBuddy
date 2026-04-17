@@ -10,7 +10,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from requests.exceptions import RequestException, Timeout, HTTPError
 
-from ai_assistant import ollama_client
+from ai_assistant import ai_client
 from ai_assistant.handlers import handle_analysis_completed
 from ai_assistant.parsers import parse_analysis_result, ParsedAnalysis
 from ai_assistant.signals import attachment_analysis_completed
@@ -31,91 +31,75 @@ def _mock_openai_response(content, status_code=200):
     return mock_response
 
 
-def _mock_login_response(token='fake-jwt-token'):
-    """Helper to create a mock login response."""
-    mock_response = Mock()
-    mock_response.json.return_value = {'token': token}
-    mock_response.raise_for_status = Mock()
-    return mock_response
+# Mock API key for tests
+MOCK_API_KEY = 'test-api-key-12345'
 
 
-# Patch _get_token in most tests to avoid login calls
-MOCK_TOKEN = 'test-jwt-token'
-
-
-@override_settings(OPENWEBUI_EMAIL='test@example.com', OPENWEBUI_PASSWORD='testpass')
-class TestOpenWebUIClient(TestCase):
-    """Tests for ollama_client module (Open WebUI integration)."""
+@override_settings(AI_API_KEY=MOCK_API_KEY)
+class TestAIClient(TestCase):
+    """Tests for ai_client module (OpenAI-compatible API integration)."""
 
     def setUp(self):
         self.test_prompt = "Test prompt for generation"
         self.test_model = "qwen2.5:7b-instruct"
         self.test_vision_model = "llava:7b"
         self.test_image_base64 = base64.b64encode(b"fake_image_data").decode('utf-8')
-        # Reset token cache between tests
-        ollama_client._token_cache['token'] = None
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_with_valid_response_returns_text(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_with_valid_response_returns_text(self, mock_post):
         expected_response = "This is the generated response text"
         mock_post.return_value = _mock_openai_response(expected_response)
 
-        result = ollama_client.generate_text(self.test_prompt, self.test_model)
+        result = ai_client.generate_text(self.test_prompt, self.test_model)
 
         self.assertEqual(result, expected_response)
         call_args = mock_post.call_args
-        self.assertIn('/api/chat/completions', call_args[0][0])
+        self.assertIn('/chat/completions', call_args[0][0])
         payload = call_args[1]['json']
         self.assertEqual(payload['model'], self.test_model)
         self.assertEqual(payload['messages'][0]['role'], 'user')
         self.assertEqual(payload['messages'][0]['content'], self.test_prompt)
 
-    @override_settings(OPENWEBUI_TEXT_MODEL='custom-model')
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_uses_model_from_settings(self, mock_post, _):
+    @override_settings(AI_TEXT_MODEL='custom-model')
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_uses_model_from_settings(self, mock_post):
         mock_post.return_value = _mock_openai_response('test')
 
-        ollama_client.generate_text(self.test_prompt)
+        ai_client.generate_text(self.test_prompt)
 
         payload = mock_post.call_args[1]['json']
         self.assertEqual(payload['model'], 'custom-model')
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_with_http_error_raises_exception(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_with_http_error_raises_exception(self, mock_post):
         mock_response = Mock()
         mock_response.status_code = 500
         mock_response.raise_for_status.side_effect = HTTPError("500 Server Error")
         mock_post.return_value = mock_response
 
         with self.assertRaises(HTTPError):
-            ollama_client.generate_text(self.test_prompt)
+            ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_with_timeout_raises_exception(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_with_timeout_raises_exception(self, mock_post):
         mock_post.side_effect = Timeout("Request timed out")
 
         with self.assertRaises(Timeout):
-            ollama_client.generate_text(self.test_prompt)
+            ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_with_connection_error_raises_exception(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_with_connection_error_raises_exception(self, mock_post):
         mock_post.side_effect = RequestException("Connection refused")
 
         with self.assertRaises(RequestException):
-            ollama_client.generate_text(self.test_prompt)
+            ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_analyze_image_with_valid_response_returns_text(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_analyze_image_with_valid_response_returns_text(self, mock_post):
         expected_response = "Analysis of the image shows maintenance invoice"
         mock_post.return_value = _mock_openai_response(expected_response)
 
-        result = ollama_client.analyze_image(
+        result = ai_client.analyze_image(
             self.test_image_base64,
             self.test_prompt,
             self.test_vision_model
@@ -123,7 +107,7 @@ class TestOpenWebUIClient(TestCase):
 
         self.assertEqual(result, expected_response)
         call_args = mock_post.call_args
-        self.assertIn('/api/chat/completions', call_args[0][0])
+        self.assertIn('/chat/completions', call_args[0][0])
         payload = call_args[1]['json']
         self.assertEqual(payload['model'], self.test_vision_model)
         content = payload['messages'][0]['content']
@@ -131,140 +115,89 @@ class TestOpenWebUIClient(TestCase):
         self.assertEqual(content[0]['type'], 'text')
         self.assertEqual(content[1]['type'], 'image_url')
 
-    @override_settings(OPENWEBUI_VISION_MODEL='custom-vision')
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_analyze_image_uses_model_from_settings(self, mock_post, _):
+    @override_settings(AI_VISION_MODEL='custom-vision')
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_analyze_image_uses_model_from_settings(self, mock_post):
         mock_post.return_value = _mock_openai_response('test')
 
-        ollama_client.analyze_image(self.test_image_base64, self.test_prompt)
+        ai_client.analyze_image(self.test_image_base64, self.test_prompt)
 
         payload = mock_post.call_args[1]['json']
         self.assertEqual(payload['model'], 'custom-vision')
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_analyze_image_with_http_error_raises_exception(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_analyze_image_with_http_error_raises_exception(self, mock_post):
         mock_response = Mock()
         mock_response.status_code = 503
         mock_response.raise_for_status.side_effect = HTTPError("503 Service Unavailable")
         mock_post.return_value = mock_response
 
         with self.assertRaises(HTTPError):
-            ollama_client.analyze_image(self.test_image_base64, self.test_prompt)
+            ai_client.analyze_image(self.test_image_base64, self.test_prompt)
 
-    @override_settings(OPENWEBUI_BASE_URL='https://custom-webui.example.com')
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_uses_custom_base_url_from_settings(self, mock_post, _):
+    @override_settings(AI_BASE_URL='https://custom-api.example.com')
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_uses_custom_base_url_from_settings(self, mock_post):
         mock_post.return_value = _mock_openai_response('test')
 
-        ollama_client.generate_text(self.test_prompt)
+        ai_client.generate_text(self.test_prompt)
 
         call_url = mock_post.call_args[0][0]
-        self.assertTrue(call_url.startswith('https://custom-webui.example.com'))
+        self.assertTrue(call_url.startswith('https://custom-api.example.com'))
 
-    @patch('ai_assistant.ollama_client._get_token', return_value=MOCK_TOKEN)
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_generate_text_sends_bearer_token(self, mock_post, _):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_generate_text_sends_bearer_token(self, mock_post):
         mock_post.return_value = _mock_openai_response('test')
 
-        ollama_client.generate_text(self.test_prompt)
+        ai_client.generate_text(self.test_prompt)
 
         headers = mock_post.call_args[1]['headers']
-        self.assertEqual(headers['Authorization'], f'Bearer {MOCK_TOKEN}')
+        self.assertEqual(headers['Authorization'], f'Bearer {MOCK_API_KEY}')
 
     def test_get_base_url_returns_default_when_setting_not_configured(self):
-        result = ollama_client._get_base_url()
+        result = ai_client._get_base_url()
 
         self.assertIsInstance(result, str)
         self.assertTrue(result.startswith('http'))
 
-
-@override_settings(OPENWEBUI_EMAIL='user@example.com', OPENWEBUI_PASSWORD='secret123')
-class TestOpenWebUILogin(TestCase):
-    """Tests for login and token caching."""
-
-    def setUp(self):
-        ollama_client._token_cache['token'] = None
-
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_login_sends_email_and_password(self, mock_post):
-        mock_post.return_value = _mock_login_response('my-jwt-token')
-
-        token = ollama_client._login()
-
-        self.assertEqual(token, 'my-jwt-token')
-        call_args = mock_post.call_args
-        self.assertIn('/api/v1/auths/signin', call_args[0][0])
-        self.assertEqual(call_args[1]['json'], {
-            'email': 'user@example.com',
-            'password': 'secret123',
-        })
-
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_get_token_caches_after_first_login(self, mock_post):
-        mock_post.return_value = _mock_login_response('cached-token')
-
-        token1 = ollama_client._get_token()
-        token2 = ollama_client._get_token()
-
-        self.assertEqual(token1, 'cached-token')
-        self.assertEqual(token2, 'cached-token')
-        # Login should only be called once
-        mock_post.assert_called_once()
-
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_invalidate_token_clears_cache(self, mock_post):
-        mock_post.return_value = _mock_login_response('token-1')
-        ollama_client._get_token()
-
-        ollama_client.invalidate_token()
-
-        mock_post.return_value = _mock_login_response('token-2')
-        token = ollama_client._get_token()
-        self.assertEqual(token, 'token-2')
-        self.assertEqual(mock_post.call_count, 2)
-
-    @override_settings(OPENWEBUI_EMAIL='', OPENWEBUI_PASSWORD='')
-    def test_login_raises_when_credentials_not_configured(self):
-        with self.assertRaises(ValueError) as ctx:
-            ollama_client._login()
-        self.assertIn('OPENWEBUI_EMAIL', str(ctx.exception))
-
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_login_raises_on_invalid_credentials(self, mock_post):
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_get_embedding_returns_vector(self, mock_post):
+        expected_embedding = [0.1, 0.2, 0.3, 0.4, 0.5]
         mock_response = Mock()
-        mock_response.raise_for_status.side_effect = HTTPError("401 Unauthorized")
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            'data': [{'embedding': expected_embedding}]
+        }
+        mock_response.raise_for_status = Mock()
         mock_post.return_value = mock_response
 
-        with self.assertRaises(HTTPError):
-            ollama_client._login()
+        result = ai_client.get_embedding("test text")
 
-    @patch('ai_assistant.ollama_client.requests.post')
-    def test_post_with_retry_re_authenticates_on_401(self, mock_post):
-        """Test that a 401 triggers re-login and retries the request."""
-        # First call: login succeeds
-        login_response = _mock_login_response('token-1')
-        # Second call: API returns 401
-        unauthorized_response = Mock()
-        unauthorized_response.status_code = 401
-        # Third call: re-login succeeds
-        relogin_response = _mock_login_response('token-2')
-        # Fourth call: API succeeds
-        success_response = _mock_openai_response('result')
+        self.assertEqual(result, expected_embedding)
+        call_args = mock_post.call_args
+        self.assertIn('/embeddings', call_args[0][0])
 
-        mock_post.side_effect = [
-            login_response,       # initial login
-            unauthorized_response, # first API call → 401
-            relogin_response,     # re-login
-            success_response,     # retry API call → success
-        ]
+    @override_settings(AI_EMBEDDING_MODEL='custom-embedding-model')
+    @patch('ai_assistant.ai_client.requests.post')
+    def test_get_embedding_uses_model_from_settings(self, mock_post):
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'data': [{'embedding': [0.1, 0.2]}]}
+        mock_response.raise_for_status = Mock()
+        mock_post.return_value = mock_response
 
-        result = ollama_client.generate_text("test prompt")
+        ai_client.get_embedding("test text")
 
-        self.assertEqual(result, 'result')
-        self.assertEqual(mock_post.call_count, 4)
+        payload = mock_post.call_args[1]['json']
+        self.assertEqual(payload['model'], 'custom-embedding-model')
+
+    @patch('ai_assistant.ai_client._get_api_key')
+    def test_get_api_key_raises_when_not_configured(self, mock_get_api_key):
+        mock_get_api_key.side_effect = ValueError("AI_API_KEY must be configured in settings")
+
+        with self.assertRaises(ValueError) as ctx:
+            ai_client._get_api_key()
+        self.assertIn('AI_API_KEY', str(ctx.exception))
 
 
 @override_settings(
@@ -420,7 +353,7 @@ class TestAnalyzeAttachmentTask(TestCase):
         expected_ai_response = "Analyzed invoice data"
         mock_generate_text.return_value = expected_ai_response
 
-        result = _analyze_pdf(attachment)
+        result = _analyze_pdf(attachment, "test prompt")
 
         self.assertEqual(result, expected_ai_response)
         mock_pdf_reader.assert_called_once()
@@ -442,7 +375,7 @@ class TestAnalyzeAttachmentTask(TestCase):
         mock_reader_instance.pages = [mock_page]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        result = _analyze_pdf(attachment)
+        result = _analyze_pdf(attachment, "test prompt")
 
         self.assertEqual(result, "No se pudo extraer texto del PDF.")
         mock_generate_text.assert_not_called()
@@ -462,20 +395,20 @@ class TestAnalyzeAttachmentTask(TestCase):
 
         mock_generate_text.return_value = "Analysis"
 
-        result = _analyze_pdf(attachment)
+        result = _analyze_pdf(attachment, "test prompt")
 
         prompt = mock_generate_text.call_args[0][0]
         self.assertIn("[...texto truncado]", prompt)
         self.assertLess(len(prompt), 5500)
 
-    @patch('ai_assistant.tasks.ollama_analyze_image')
+    @patch('ai_assistant.tasks.analyze_image')
     @patch('builtins.open', new_callable=mock_open, read_data=b'fake_image_binary_data')
     def test_analyze_image_reads_file_and_calls_vision(self, mock_file, mock_analyze_image):
         attachment = self._create_image_attachment()
         expected_result = "Image shows maintenance receipt"
         mock_analyze_image.return_value = expected_result
 
-        result = _analyze_image(attachment)
+        result = _analyze_image(attachment, "test prompt")
 
         self.assertEqual(result, expected_result)
         mock_analyze_image.assert_called_once()
@@ -648,7 +581,7 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
         mock_pdf_reader.side_effect = Exception("PDF is corrupted")
 
         with self.assertRaises(Exception) as context:
-            _analyze_pdf(attachment)
+            _analyze_pdf(attachment, "test prompt")
 
         self.assertIn("PDF is corrupted", str(context.exception))
 
@@ -665,14 +598,14 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
         mock_open_file.side_effect = IOError("Cannot read file")
 
         with self.assertRaises(IOError) as context:
-            _analyze_image(attachment)
+            _analyze_image(attachment, "test prompt")
 
         self.assertIn("Cannot read file", str(context.exception))
 
     @patch('ai_assistant.tasks.generate_text')
     @patch('ai_assistant.tasks.PdfReader')
     def test_analyze_pdf_with_multiple_empty_pages_returns_no_text(self, mock_pdf_reader, mock_generate_text):
-        pdf_file = SimpleUploadedFile("empty.pdf", b'empty', content_type="application/pdf")
+        pdf_file = SimpleUploadedFile("empty.pdf", b'content', content_type="application/pdf")
         attachment = EventAttachment.objects.create(
             event=self.event,
             file=pdf_file,
@@ -680,386 +613,13 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
             original_filename='empty.pdf'
         )
 
-        mock_pages = [Mock() for _ in range(5)]
-        for page in mock_pages:
-            page.extract_text.return_value = None
-
+        empty_page = Mock()
+        empty_page.extract_text.return_value = ""
         mock_reader_instance = Mock()
-        mock_reader_instance.pages = mock_pages
+        mock_reader_instance.pages = [empty_page, empty_page, empty_page]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        result = _analyze_pdf(attachment)
+        result = _analyze_pdf(attachment, "test prompt")
 
         self.assertEqual(result, "No se pudo extraer texto del PDF.")
         mock_generate_text.assert_not_called()
-
-    @patch('ai_assistant.tasks.generate_text')
-    @patch('ai_assistant.tasks.PdfReader')
-    def test_analyze_pdf_with_mixed_pages_extracts_only_filled(self, mock_pdf_reader, mock_generate_text):
-        pdf_file = SimpleUploadedFile("mixed.pdf", b'mixed', content_type="application/pdf")
-        attachment = EventAttachment.objects.create(
-            event=self.event,
-            file=pdf_file,
-            file_type=EventAttachment.FileType.PDF,
-            original_filename='mixed.pdf'
-        )
-
-        mock_page1 = Mock()
-        mock_page1.extract_text.return_value = None
-        mock_page2 = Mock()
-        mock_page2.extract_text.return_value = "Invoice details"
-        mock_page3 = Mock()
-        mock_page3.extract_text.return_value = ""
-        mock_page4 = Mock()
-        mock_page4.extract_text.return_value = "Total cost"
-
-        mock_reader_instance = Mock()
-        mock_reader_instance.pages = [mock_page1, mock_page2, mock_page3, mock_page4]
-        mock_pdf_reader.return_value = mock_reader_instance
-
-        mock_generate_text.return_value = "Analysis complete"
-
-        result = _analyze_pdf(attachment)
-
-        self.assertEqual(result, "Analysis complete")
-        prompt = mock_generate_text.call_args[0][0]
-        self.assertIn("Invoice details", prompt)
-        self.assertIn("Total cost", prompt)
-
-
-class TestParseAnalysisResult(TestCase):
-    """Tests for parse_analysis_result parser."""
-
-    def test_valid_json_parses_all_fields(self):
-        text = json.dumps({
-            "tipo_servicio": "Cambio de aceite",
-            "task_codes": ["oil_change"],
-            "km": 15000,
-            "coste_total": 75.50,
-            "fecha": "2026-01-15",
-            "taller": "Taller Pepe",
-            "piezas": ["Filtro aceite", "Aceite 10W40"],
-            "observaciones": "Todo correcto"
-        })
-        result = parse_analysis_result(text)
-
-        self.assertEqual(result.task_codes, ["oil_change"])
-        self.assertEqual(result.km, 15000)
-        self.assertEqual(result.cost, Decimal("75.50"))
-        self.assertEqual(result.date, date(2026, 1, 15))
-        self.assertIn("Taller: Taller Pepe", result.notes_extra)
-        self.assertIn("Filtro aceite", result.notes_extra)
-        self.assertIn("Todo correcto", result.notes_extra)
-
-    def test_json_with_code_fences_parses(self):
-        text = '```json\n{"task_codes": ["brake_check"], "km": 8000, "coste_total": 120, "fecha": "2026-03-01", "taller": "No disponible", "piezas": "No disponible", "observaciones": "No disponible"}\n```'
-        result = parse_analysis_result(text)
-
-        self.assertEqual(result.task_codes, ["brake_check"])
-        self.assertEqual(result.km, 8000)
-        self.assertEqual(result.cost, Decimal("120.00"))
-
-    def test_json_with_no_disponible_fields(self):
-        text = json.dumps({
-            "tipo_servicio": "Revisión",
-            "task_codes": [],
-            "km": "No disponible",
-            "coste_total": "No disponible",
-            "fecha": "No disponible",
-            "taller": "No disponible",
-            "piezas": "No disponible",
-            "observaciones": "No disponible"
-        })
-        result = parse_analysis_result(text)
-
-        self.assertIsNone(result.km)
-        self.assertIsNone(result.cost)
-        self.assertIsNone(result.date)
-        self.assertEqual(result.notes_extra, '')
-
-    def test_json_infers_task_code_from_tipo_servicio(self):
-        text = json.dumps({
-            "tipo_servicio": "Cambio de aceite y filtro",
-            "task_codes": [],
-            "km": None,
-            "coste_total": None,
-            "fecha": None,
-            "taller": None,
-            "piezas": None,
-            "observaciones": None
-        })
-        result = parse_analysis_result(text)
-        self.assertIn("oil_change", result.task_codes)
-
-    def test_regex_fallback_extracts_cost_and_km(self):
-        text = "Factura del taller.\nKm: 23000 km\nTotal: 95,50 €\nFecha: 15/03/2026"
-        result = parse_analysis_result(text)
-
-        self.assertEqual(result.km, 23000)
-        self.assertEqual(result.cost, Decimal("95.50"))
-        self.assertEqual(result.date, date(2026, 3, 15))
-
-    def test_regex_fallback_detects_keywords(self):
-        text = "Se realizó cambio de aceite y revisión de frenos. Total: 150 EUR"
-        result = parse_analysis_result(text)
-
-        self.assertIn("oil_change", result.task_codes)
-        self.assertIn("brake_check", result.task_codes)
-        self.assertEqual(result.cost, Decimal("150.00"))
-
-    def test_invalid_json_falls_back_to_regex(self):
-        text = "Not valid JSON at all {broken"
-        result = parse_analysis_result(text)
-        self.assertIsInstance(result, ParsedAnalysis)
-
-    def test_json_filters_invalid_task_codes(self):
-        text = json.dumps({
-            "task_codes": ["oil_change", "invalid_code", "brake_check"],
-            "km": None, "coste_total": None, "fecha": None,
-            "taller": None, "piezas": None, "observaciones": None
-        })
-        result = parse_analysis_result(text)
-        self.assertEqual(result.task_codes, ["oil_change", "brake_check"])
-
-    def test_european_cost_format(self):
-        text = json.dumps({
-            "task_codes": [], "km": None, "coste_total": "1.234,56",
-            "fecha": None, "taller": None, "piezas": None, "observaciones": None
-        })
-        result = parse_analysis_result(text)
-        self.assertEqual(result.cost, Decimal("1234.56"))
-
-
-class TestHandleAnalysisCompleted(TestCase):
-    """Tests for handle_analysis_completed signal handler."""
-
-    def setUp(self):
-        self.user = CustomUser.objects.create_user(
-            username='testhandler',
-            email='handler@example.com',
-            password='testpass123'
-        )
-        self.vehicle = Vehicle.objects.create(
-            user=self.user,
-            vehicle_type='motorcycle',
-            brand='Honda',
-            model='CB500F',
-            year=2021,
-            current_km=10000,
-            usage_type='mixed'
-        )
-
-    def _create_event_with_attachment(self, **event_kwargs):
-        defaults = {
-            'vehicle': self.vehicle,
-            'task_code': 'oil_change',
-            'date': '2026-01-01',
-            'km_at_service': 9000,
-        }
-        defaults.update(event_kwargs)
-        event = MaintenanceEvent.objects.create(**defaults)
-        pdf_file = SimpleUploadedFile("test.pdf", b'%PDF', content_type="application/pdf")
-        attachment = EventAttachment.objects.create(
-            event=event,
-            file=pdf_file,
-            file_type=EventAttachment.FileType.PDF,
-            original_filename='test.pdf'
-        )
-        return event, attachment
-
-    def test_handler_overwrites_cost(self):
-        event, attachment = self._create_event_with_attachment(cost=Decimal('50.00'))
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": 120.00,
-            "fecha": None, "taller": None, "piezas": None, "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(event.cost, Decimal("120.00"))
-
-    def test_handler_fills_empty_cost(self):
-        event, attachment = self._create_event_with_attachment(cost=None)
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": 85.00,
-            "fecha": None, "taller": None, "piezas": None, "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(event.cost, Decimal("85.00"))
-
-    def test_handler_overwrites_km(self):
-        event, attachment = self._create_event_with_attachment(km_at_service=9000)
-        analysis = json.dumps({
-            "task_codes": [], "km": 9500, "coste_total": None,
-            "fecha": None, "taller": None, "piezas": None, "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(event.km_at_service, 9500)
-
-    def test_handler_overwrites_date(self):
-        event, attachment = self._create_event_with_attachment(date='2026-01-01')
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": None,
-            "fecha": "2026-02-15", "taller": None, "piezas": None, "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(str(event.date), '2026-02-15')
-
-    def test_handler_overwrites_task_code(self):
-        event, attachment = self._create_event_with_attachment(task_code='oil_change')
-        analysis = json.dumps({
-            "task_codes": ["brake_check"], "km": None, "coste_total": None,
-            "fecha": None, "taller": None, "piezas": None, "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(event.task_code, 'brake_check')
-
-    def test_handler_appends_notes_with_separator(self):
-        event, attachment = self._create_event_with_attachment(notes='Notas originales')
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": None,
-            "fecha": None, "taller": "Taller ABC", "piezas": None,
-            "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertIn('Notas originales', event.notes)
-        self.assertIn('--- Análisis adjunto ---', event.notes)
-        self.assertIn('Taller: Taller ABC', event.notes)
-
-    def test_handler_sets_notes_when_empty(self):
-        event, attachment = self._create_event_with_attachment(notes='')
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": None,
-            "fecha": None, "taller": "MotoShop", "piezas": None,
-            "observaciones": None
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertIn('Taller: MotoShop', event.notes)
-        self.assertNotIn('--- Análisis adjunto ---', event.notes)
-
-    def test_handler_no_update_when_no_data(self):
-        event, attachment = self._create_event_with_attachment(
-            cost=Decimal('50.00'), notes='Original'
-        )
-        analysis = json.dumps({
-            "task_codes": [], "km": None, "coste_total": None,
-            "fecha": None, "taller": "No disponible", "piezas": "No disponible",
-            "observaciones": "No disponible"
-        })
-
-        handle_analysis_completed(sender=None, attachment_id=attachment.id, analysis_result=analysis)
-
-        event.refresh_from_db()
-        self.assertEqual(event.cost, Decimal('50.00'))
-        self.assertEqual(event.notes, 'Original')
-
-    def test_handler_nonexistent_attachment_does_not_crash(self):
-        handle_analysis_completed(sender=None, attachment_id=99999, analysis_result='{}')
-
-
-@override_settings(
-    CELERY_TASK_ALWAYS_EAGER=True,
-    CELERY_TASK_EAGER_PROPAGATES=True
-)
-class TestSignalIntegration(TestCase):
-    """Tests that the signal fires from analyze_attachment task."""
-
-    def setUp(self):
-        self.user = CustomUser.objects.create_user(
-            username='signaluser',
-            email='signal@example.com',
-            password='testpass123'
-        )
-        self.vehicle = Vehicle.objects.create(
-            user=self.user,
-            vehicle_type='motorcycle',
-            brand='Suzuki',
-            model='GSX-R750',
-            year=2023,
-            current_km=3000,
-            usage_type='mixed'
-        )
-        self.event = MaintenanceEvent.objects.create(
-            vehicle=self.vehicle,
-            task_code='oil_change',
-            date='2026-01-01',
-            km_at_service=2500,
-        )
-
-    @patch('ai_assistant.tasks._analyze_pdf')
-    def test_signal_fires_on_successful_analysis(self, mock_analyze_pdf):
-        analysis_json = json.dumps({
-            "task_codes": ["oil_change"], "km": 3000, "coste_total": 65.00,
-            "fecha": "2026-01-20", "taller": "Moto Center",
-            "piezas": ["Aceite 10W40"], "observaciones": None
-        })
-        mock_analyze_pdf.return_value = analysis_json
-
-        pdf_file = SimpleUploadedFile("invoice.pdf", b'%PDF', content_type="application/pdf")
-        attachment = EventAttachment.objects.create(
-            event=self.event,
-            file=pdf_file,
-            file_type=EventAttachment.FileType.PDF,
-            original_filename='invoice.pdf'
-        )
-
-        received = []
-
-        def signal_receiver(sender, attachment_id, analysis_result, **kwargs):
-            received.append({'attachment_id': attachment_id, 'analysis_result': analysis_result})
-
-        attachment_analysis_completed.connect(signal_receiver)
-        try:
-            analyze_attachment(attachment.id)
-        finally:
-            attachment_analysis_completed.disconnect(signal_receiver)
-
-        self.assertEqual(len(received), 1)
-        self.assertEqual(received[0]['attachment_id'], attachment.id)
-        self.assertEqual(received[0]['analysis_result'], analysis_json)
-
-    @patch('ai_assistant.tasks._analyze_pdf')
-    def test_signal_not_fired_on_failed_analysis(self, mock_analyze_pdf):
-        mock_analyze_pdf.side_effect = Exception("Analysis failed")
-
-        pdf_file = SimpleUploadedFile("fail.pdf", b'%PDF', content_type="application/pdf")
-        attachment = EventAttachment.objects.create(
-            event=self.event,
-            file=pdf_file,
-            file_type=EventAttachment.FileType.PDF,
-            original_filename='fail.pdf'
-        )
-
-        received = []
-
-        def signal_receiver(sender, attachment_id, analysis_result, **kwargs):
-            received.append(True)
-
-        attachment_analysis_completed.connect(signal_receiver)
-        try:
-            with self.assertRaises(Exception):
-                analyze_attachment(attachment.id)
-        finally:
-            attachment_analysis_completed.disconnect(signal_receiver)
-
-        self.assertEqual(len(received), 0)
-

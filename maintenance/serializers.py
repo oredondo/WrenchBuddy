@@ -1,3 +1,5 @@
+from datetime import date as date_cls
+
 from rest_framework import serializers
 
 from .models import TaskCatalog, MaintenanceEvent, EventAttachment, Accessory
@@ -37,6 +39,12 @@ class MaintenanceEventSerializer(serializers.ModelSerializer):
 
 
 class MaintenanceEventCreateSerializer(serializers.ModelSerializer):
+    # These fields are optional when a file attachment will be provided;
+    # the AI analysis will fill them in via handle_analysis_completed.
+    task_code = serializers.CharField(max_length=50, required=False, default='pending_analysis')
+    date = serializers.DateField(required=False, default=date_cls.today)
+    km_at_service = serializers.IntegerField(min_value=0, required=False, default=0)
+
     class Meta:
         model = MaintenanceEvent
         fields = ['id', 'vehicle', 'task_code', 'date', 'km_at_service', 'notes', 'cost']
@@ -62,7 +70,7 @@ class EventAttachmentSerializer(serializers.ModelSerializer):
         ]
 
     def validate_file(self, value):
-        allowed_types = ['application/pdf', 'image/png', 'image/jpeg', 'image/webp']
+        allowed_types = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp']
         if value.content_type not in allowed_types:
             raise serializers.ValidationError(
                 "Tipo de archivo no permitido. Solo PDF, PNG, JPEG o WebP."

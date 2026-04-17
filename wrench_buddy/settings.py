@@ -165,12 +165,14 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
-# Open WebUI (IA)
-OPENWEBUI_BASE_URL = os.environ.get('OPENWEBUI_BASE_URL', 'https://leria.gal')
-OPENWEBUI_EMAIL = os.environ.get('OPENWEBUI_EMAIL', '')
-OPENWEBUI_PASSWORD = os.environ.get('OPENWEBUI_PASSWORD', '')
-OPENWEBUI_TEXT_MODEL = os.environ.get('OPENWEBUI_TEXT_MODEL', 'leria:desenvolve')
-OPENWEBUI_VISION_MODEL = os.environ.get('OPENWEBUI_VISION_MODEL', 'leria:redacta')
+# AI API (OpenAI-compatible)
+AI_BASE_URL = os.environ.get('AI_BASE_URL', 'https://leria.gal')
+AI_API_PATH = os.environ.get('AI_API_PATH', '/api')
+AI_API_KEY = os.environ.get('AI_API_KEY', '')
+AI_TEXT_MODEL = os.environ.get('AI_TEXT_MODEL', 'leria:redacta')
+AI_VISION_MODEL = os.environ.get('AI_VISION_MODEL', 'leria:redacta')
+AI_EMBEDDING_MODEL = os.environ.get('AI_EMBEDDING_MODEL', 'leria:redacta')
+EMBEDDING_DIMENSIONS = 1536  # text-embedding-3-small output size
 
 # Django REST Framework
 REST_FRAMEWORK = {

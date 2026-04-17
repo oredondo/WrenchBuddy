@@ -35,10 +35,21 @@ def handle_analysis_completed(sender, attachment_id, analysis_result, **kwargs):
         event.date = parsed.date
         updated_fields.append('date')
 
-    # Overwrite task_code if analysis identifies a valid one
-    if parsed.task_codes:
-        event.task_code = parsed.task_codes[0]
+    # Fill task_code only when it's still the placeholder (user didn't provide one)
+    if parsed.task_codes and event.task_code == 'pending_analysis':
+        new_code = parsed.task_codes[0]
+        event.task_code = new_code
         updated_fields.append('task_code')
+        # Ensure the resolved task_code exists in the vehicle's catalog
+        from maintenance.models import TaskCatalog
+        TaskCatalog.objects.get_or_create(
+            vehicle=event.vehicle,
+            task_code=new_code,
+            defaults={
+                'name': new_code.replace('_', ' ').title(),
+                'source': TaskCatalog.Source.USER_CREATED,
+            },
+        )
 
     # Always append notes (never replace)
     if parsed.notes_extra:

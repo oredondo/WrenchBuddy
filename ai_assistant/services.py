@@ -1,7 +1,7 @@
 import logging
 
 from ai_assistant.context_builder import build_vehicle_context
-from ai_assistant.ollama_client import generate_text
+from ai_assistant.ai_client import generate_text
 from ai_assistant.recommendation_prompt import build_recommendation_prompt, parse_recommendations
 
 logger = logging.getLogger(__name__)

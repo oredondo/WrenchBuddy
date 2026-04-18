@@ -29,7 +29,7 @@ class MaintenanceEventSerializer(serializers.ModelSerializer):
         model = MaintenanceEvent
         fields = [
             'id', 'vehicle', 'task_code', 'task_name', 'date', 'km_at_service',
-            'notes', 'cost', 'created_at', 'updated_at'
+            'notes', 'cost', 'is_public', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'task_name']
 
@@ -47,7 +47,7 @@ class MaintenanceEventCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MaintenanceEvent
-        fields = ['id', 'vehicle', 'task_code', 'date', 'km_at_service', 'notes', 'cost']
+        fields = ['id', 'vehicle', 'task_code', 'date', 'km_at_service', 'notes', 'cost', 'is_public']
         read_only_fields = ['id']
 
     def validate_vehicle(self, value):

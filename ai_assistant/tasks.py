@@ -12,16 +12,6 @@ from ai_assistant.parsers import parse_catalog_items
 logger = logging.getLogger(__name__)
 
 
-@shared_task(bind=True, max_retries=2, default_retry_delay=60)
-def compute_whats_due(self, vehicle_id: int):
-    """Compute AI maintenance recommendations for a vehicle and return the result list."""
-    from ai_assistant.services import get_whats_due
-    try:
-        return get_whats_due(vehicle_id)
-    except Exception as exc:
-        logger.exception("compute_whats_due failed for vehicle %s", vehicle_id)
-        raise self.retry(exc=exc)
-
 
 CATALOG_GENERATION_PROMPT = """You are a motorcycle/vehicle maintenance expert.
 Generate a maintenance task catalog for the following vehicle.

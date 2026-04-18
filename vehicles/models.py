@@ -36,6 +36,7 @@ class Vehicle(models.Model):
         default=UsageType.MIXED
     )
     notes = models.TextField(blank=True)
+    is_public = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

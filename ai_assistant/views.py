@@ -1,62 +1,73 @@
 import logging
 
-from celery.result import AsyncResult
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from ai_assistant.tasks import compute_whats_due
 from vehicles.models import Vehicle
 
 logger = logging.getLogger(__name__)
 
 
-class WhatsDueView(APIView):
-    """GET /api/ai/whats-due/<vehicle_id>/
-    Triggers a Celery task and returns the task_id for polling.
+class AIChatView(APIView):
+    """POST /api/ai/chat/<vehicle_id>/
+    Body: { message: str, history: [{role, content}, ...] }
+    Returns: { response: str }
     """
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, vehicle_id):
+    def post(self, request, vehicle_id):
         try:
             vehicle = Vehicle.objects.get(id=vehicle_id, user=request.user)
         except Vehicle.DoesNotExist:
             return Response({'detail': 'Vehículo no encontrado.'}, status=404)
 
-        if not vehicle.task_catalog.exists():
-            return Response(
-                {'detail': 'El vehículo no tiene tareas de mantenimiento definidas.'},
-                status=400,
-            )
+        message = (request.data.get('message') or '').strip()
+        if not message:
+            return Response({'detail': 'Mensaje vacío.'}, status=400)
 
-        task = compute_whats_due.delay(vehicle_id)
-        return Response({'task_id': task.id, 'status': 'pending'}, status=202)
+        history = request.data.get('history') or []
 
-
-class WhatsDuePollView(APIView):
-    """GET /api/ai/whats-due/<vehicle_id>/poll/<task_id>/
-    Polls the Celery task result.
-    Returns {"status": "pending"} while running,
-    {"status": "ready", "result": [...]} when done,
-    or {"status": "failed", "detail": "..."} on error.
-    """
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, vehicle_id, task_id):
-        # Verify the vehicle belongs to the user
-        if not Vehicle.objects.filter(id=vehicle_id, user=request.user).exists():
-            return Response({'detail': 'Vehículo no encontrado.'}, status=404)
-
-        result = AsyncResult(task_id)
-
-        if not result.ready():
-            return Response({'status': 'pending'})
-
-        if result.successful():
-            return Response({'status': 'ready', 'result': result.get()})
-
-        logger.error("compute_whats_due task %s failed: %s", task_id, result.result)
-        return Response(
-            {'status': 'failed', 'detail': 'Error al consultar la IA. Inténtalo de nuevo.'},
-            status=502,
+        system_prompt = (
+            f"You are WrenchBuddy, a vehicle maintenance assistant. "
+            f"You help the owner of a {vehicle.year} {vehicle.brand} {vehicle.model}.\n"
+            "You have tools to query the vehicle's real maintenance database. "
+            "Use them to give accurate, data-driven answers.\n"
+            "Rules:\n"
+            "- Always reply in the same language the user writes (Spanish if they write in Spanish).\n"
+            "- For safety-critical issues (brakes, tires, steering) always recommend professional inspection.\n"
+            "- Be precise with numbers: km, costs, dates.\n"
+            "- If data is missing, say so clearly."
         )
+
+        messages = [{'role': 'system', 'content': system_prompt}]
+        for msg in history[-10:]:
+            if msg.get('role') in ('user', 'assistant') and msg.get('content'):
+                messages.append({'role': msg['role'], 'content': msg['content']})
+        messages.append({'role': 'user', 'content': message})
+
+        try:
+            from ai_assistant.chat_tools import (
+                _get_accessories, _get_maintenance_history,
+                _get_spending_summary, _get_task_catalog, _get_vehicle_info,
+            )
+            context = "\n".join([
+                "=== VEHICLE INFO ===",
+                _get_vehicle_info(vehicle_id),
+                "=== MAINTENANCE HISTORY (last 50, most recent first) ===",
+                _get_maintenance_history(vehicle_id, 50),
+                "=== TASK CATALOG ===",
+                _get_task_catalog(vehicle_id),
+                "=== ACCESSORIES ===",
+                _get_accessories(vehicle_id),
+                "=== SPENDING SUMMARY ===",
+                _get_spending_summary(vehicle_id),
+            ])
+            messages[0]['content'] += f"\n\nCURRENT DATABASE CONTEXT (live data):\n{context}"
+
+            from ai_assistant.ai_client import generate_conversation
+            reply = generate_conversation(messages)
+            return Response({'response': reply})
+        except Exception:
+            logger.exception("AIChatView error vehicle=%s", vehicle_id)
+            return Response({'detail': 'Error al consultar la IA.'}, status=502)

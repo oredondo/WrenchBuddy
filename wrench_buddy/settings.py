@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'vehicles',
     'maintenance',
     'ai_assistant',
+    'social',
 ]
 
 # Custom user model
@@ -151,9 +152,31 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-# Media files (uploads)
-MEDIA_URL = 'media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+# Media files — S3 (MinIO en dev, AWS en prod) o local según USE_S3
+USE_S3 = os.environ.get('USE_S3', 'false') == 'true'
+
+if USE_S3:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+    AWS_ACCESS_KEY_ID       = os.environ.get('AWS_ACCESS_KEY_ID', 'minioadmin')
+    AWS_SECRET_ACCESS_KEY   = os.environ.get('AWS_SECRET_ACCESS_KEY', 'minioadmin123')
+    AWS_STORAGE_BUCKET_NAME = os.environ.get('AWS_STORAGE_BUCKET_NAME', 'wrenchbuddy-media')
+    AWS_S3_ENDPOINT_URL     = os.environ.get('AWS_S3_ENDPOINT_URL', 'http://localhost:9000')
+    AWS_S3_REGION_NAME      = os.environ.get('AWS_S3_REGION_NAME', 'us-east-1')
+    AWS_S3_ADDRESSING_STYLE = 'path'   # necesario para MinIO
+    AWS_DEFAULT_ACL         = 'public-read'
+    AWS_S3_FILE_OVERWRITE   = False
+    AWS_QUERYSTRING_AUTH    = False    # URLs públicas sin firma
+    MEDIA_URL = f"{AWS_S3_ENDPOINT_URL}/{AWS_STORAGE_BUCKET_NAME}/"
+else:
+    MEDIA_URL = 'media/'
+    MEDIA_ROOT = BASE_DIR / 'media'
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

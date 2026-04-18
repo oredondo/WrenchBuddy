@@ -1,6 +1,8 @@
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import requests
 from django.conf import settings
@@ -141,3 +143,84 @@ def analyze_image(image_base64: str, prompt: str, model: str = None) -> str:
     result = response.json()['choices'][0]['message']['content']
     _log_interaction('image', model, prompt, result)
     return result
+
+
+def generate_conversation(messages: list[dict], model: str = None) -> str:
+    """Send a full messages list to the chat completions endpoint and return the reply."""
+    if model is None:
+        model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
+
+    url = f"{_get_base_url()}/chat/completions"
+    payload = {
+        'model': model,
+        'messages': messages,
+        'stream': False,
+        'chat_template_kwargs': {'enable_thinking': False},
+    }
+    response = _post_request(url, payload)
+    result = response.json()['choices'][0]['message']['content']
+    user_msg = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
+    _log_interaction('conversation', model, user_msg, result)
+    return result
+
+
+def chat_with_tools(
+    messages: list[dict],
+    tools: list[dict],
+    tool_executor: Callable[[str, dict], str],
+    model: str = None,
+    max_iterations: int = 6,
+) -> str:
+    """Run a chat completion loop with OpenAI-compatible tool calling.
+
+    tool_executor(tool_name, tool_args) must return a JSON string with the result.
+    Loops until the model returns a plain text response or max_iterations is reached.
+    """
+    if model is None:
+        model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
+
+    url = f"{_get_base_url()}/chat/completions"
+    current_messages = list(messages)
+    user_message = next(
+        (m['content'] for m in reversed(messages) if m['role'] == 'user'), ''
+    )
+
+    for _ in range(max_iterations):
+        payload = {
+            'model': model,
+            'messages': current_messages,
+            'tools': tools,
+            'stream': False,
+            'chat_template_kwargs': {'enable_thinking': False},
+        }
+        response = _post_request(url, payload)
+        choice = response.json()['choices'][0]
+        assistant_message = choice['message']
+
+        current_messages.append(assistant_message)
+
+        tool_calls = assistant_message.get('tool_calls') or []
+        if not tool_calls:
+            result = assistant_message.get('content', '')
+            _log_interaction('chat_tools', model, user_message, result)
+            return result
+
+        for tc in tool_calls:
+            tool_name = tc['function']['name']
+            try:
+                tool_args = json.loads(tc['function']['arguments'])
+            except Exception:
+                tool_args = {}
+
+            tool_result = tool_executor(tool_name, tool_args)
+            current_messages.append({
+                'role': 'tool',
+                'tool_call_id': tc['id'],
+                'content': tool_result,
+            })
+
+    # Fallback: return last assistant content if max iterations hit
+    for msg in reversed(current_messages):
+        if msg.get('role') == 'assistant' and msg.get('content'):
+            return msg['content']
+    return 'No se pudo completar la consulta.'

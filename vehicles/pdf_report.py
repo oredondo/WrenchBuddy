@@ -6,7 +6,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, Image
 )
 
 
@@ -71,7 +71,7 @@ def _table_style(header_color=ACCENT):
     ])
 
 
-def generate_vehicle_pdf(vehicle, events, accessories) -> bytes:
+def generate_vehicle_pdf(vehicle, events, accessories, cover_photo=None) -> bytes:
     """Build a PDF summary for a vehicle and return it as bytes."""
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -87,17 +87,51 @@ def generate_vehicle_pdf(vehicle, events, accessories) -> bytes:
     story = []
 
     # ── Header ────────────────────────────────────────────────────────────────
-    story.append(Paragraph(f"{vehicle.brand} {vehicle.model} ({vehicle.year})", s['title']))
     vehicle_type = 'Motocicleta' if vehicle.vehicle_type == 'motorcycle' else 'Coche'
     usage_map = {'city': 'Ciudad', 'mixed': 'Mixto', 'highway': 'Carretera'}
     usage = usage_map.get(vehicle.usage_type, vehicle.usage_type)
     displacement = f" · {vehicle.displacement} cc" if vehicle.displacement else ''
-    story.append(Paragraph(
+
+    title_para = Paragraph(f"{vehicle.brand} {vehicle.model} ({vehicle.year})", s['title'])
+    subtitle_para = Paragraph(
         f"{vehicle_type}{displacement} · {usage} · {vehicle.current_km:,} km actuales",
         s['subtitle'],
-    ))
-    if vehicle.notes:
-        story.append(Paragraph(vehicle.notes, s['muted']))
+    )
+
+    cover_img = None
+    if cover_photo:
+        try:
+            img_buf = BytesIO()
+            with cover_photo.image.open('rb') as f:
+                img_buf.write(f.read())
+            img_buf.seek(0)
+            cover_img = Image(img_buf, width=5 * cm, height=4 * cm, kind='proportional')
+        except Exception:
+            cover_img = None
+
+    if cover_img:
+        text_col = [title_para, subtitle_para]
+        if vehicle.notes:
+            text_col.append(Paragraph(vehicle.notes, s['muted']))
+        header_table = Table(
+            [[text_col, cover_img]],
+            colWidths=[page_w - 5.5 * cm, 5.5 * cm],
+        )
+        header_table.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(header_table)
+    else:
+        story.append(title_para)
+        story.append(subtitle_para)
+        if vehicle.notes:
+            story.append(Paragraph(vehicle.notes, s['muted']))
+
     story.append(HRFlowable(width='100%', thickness=1, color=ACCENT, spaceAfter=8))
 
     # ── Historial de mantenimiento ────────────────────────────────────────────

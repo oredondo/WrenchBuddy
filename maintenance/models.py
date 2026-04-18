@@ -52,6 +52,7 @@ class MaintenanceEvent(models.Model):
     km_at_service = models.PositiveIntegerField()
     notes = models.TextField(blank=True)
     cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    is_public = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -51,8 +51,12 @@ class VehiclePDFReportView(APIView):
 
         events = vehicle.maintenance_events.order_by('-date', '-created_at')
         accessories = vehicle.accessories.order_by('-created_at')
+        cover_photo = (
+            vehicle.garage_photos.filter(is_cover=True).first()
+            or vehicle.garage_photos.filter(is_public=True).first()
+        )
 
-        pdf_bytes = generate_vehicle_pdf(vehicle, events, accessories)
+        pdf_bytes = generate_vehicle_pdf(vehicle, events, accessories, cover_photo=cover_photo)
 
         filename = f"wrenchbuddy_{vehicle.brand}_{vehicle.model}_{vehicle.year}.pdf"
         filename = filename.replace(' ', '_')

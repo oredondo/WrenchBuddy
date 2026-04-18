@@ -9,7 +9,7 @@ class VehicleSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'vehicle_type', 'brand', 'model', 'year',
             'current_km', 'displacement', 'usage_type', 'notes',
-            'created_at', 'updated_at'
+            'is_public', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
 
@@ -23,7 +23,7 @@ class VehicleListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Vehicle
-        fields = ['id', 'vehicle_type', 'brand', 'model', 'year', 'current_km']
+        fields = ['id', 'vehicle_type', 'brand', 'model', 'year', 'current_km', 'is_public']
 
 
 class VehicleDocumentSerializer(serializers.ModelSerializer):

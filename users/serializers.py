@@ -6,8 +6,9 @@ from .models import CustomUser
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'username', 'first_name', 'last_name', 'date_joined']
-        read_only_fields = ['id', 'date_joined']
+        fields = ['id', 'email', 'username', 'first_name', 'last_name',
+                  'display_name', 'bio', 'location', 'avatar', 'show_spending', 'date_joined']
+        read_only_fields = ['id', 'email', 'username', 'date_joined']
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
@@ -24,3 +25,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         user.set_password(password)
         user.save()
         return user
+
+
+class PublicUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['username', 'display_name', 'bio', 'location', 'avatar', 'show_spending']

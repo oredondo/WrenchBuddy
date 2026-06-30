@@ -20,7 +20,7 @@ PyPDF2==3.0.1
 reportlab==4.4.10
 python-dateutil==2.9.0.post0
 redis==5.2.1
-requests==2.32.3
+langchain-openai>=0.3
 six==1.17.0
 sqlparse==0.5.5
 tzdata==2025.3

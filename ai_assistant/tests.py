@@ -7,8 +7,8 @@ from unittest.mock import Mock, patch, MagicMock, mock_open
 
 from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase, override_settings
-from requests.exceptions import RequestException, Timeout, HTTPError
+from django.test import TestCase, SimpleTestCase, override_settings
+from langchain_core.messages import AIMessage
 
 from ai_assistant import ai_client
 from ai_assistant.handlers import handle_analysis_completed
@@ -20,24 +20,21 @@ from users.models import CustomUser
 from vehicles.models import Vehicle
 
 
-def _mock_openai_response(content, status_code=200):
-    """Helper to create a mock OpenAI-compatible response."""
-    mock_response = Mock()
-    mock_response.status_code = status_code
-    mock_response.json.return_value = {
-        'choices': [{'message': {'content': content}}]
-    }
-    mock_response.raise_for_status = Mock()
-    return mock_response
-
-
 # Mock API key for tests
 MOCK_API_KEY = 'test-api-key-12345'
 
 
+def _mock_llm(content: str = 'response') -> Mock:
+    """Return a mock LLM whose invoke() returns an AIMessage."""
+    mock = Mock()
+    mock.invoke.return_value = AIMessage(content=content)
+    mock.bind_tools.return_value = mock
+    return mock
+
+
 @override_settings(AI_API_KEY=MOCK_API_KEY)
-class TestAIClient(TestCase):
-    """Tests for ai_client module (OpenAI-compatible API integration)."""
+class TestAIClient(SimpleTestCase):
+    """Tests for ai_client module (LangChain / OpenAI-compatible integration)."""
 
     def setUp(self):
         self.test_prompt = "Test prompt for generation"
@@ -45,159 +42,164 @@ class TestAIClient(TestCase):
         self.test_vision_model = "llava:7b"
         self.test_image_base64 = base64.b64encode(b"fake_image_data").decode('utf-8')
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_with_valid_response_returns_text(self, mock_post):
-        expected_response = "This is the generated response text"
-        mock_post.return_value = _mock_openai_response(expected_response)
+    # ── generate_text ────────────────────────────────────────────────────────
+
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_generate_text_with_valid_response_returns_text(self, mock_get_llm):
+        expected = "This is the generated response text"
+        mock_get_llm.return_value = _mock_llm(expected)
 
         result = ai_client.generate_text(self.test_prompt, self.test_model)
 
-        self.assertEqual(result, expected_response)
-        call_args = mock_post.call_args
-        self.assertIn('/chat/completions', call_args[0][0])
-        payload = call_args[1]['json']
-        self.assertEqual(payload['model'], self.test_model)
-        self.assertEqual(payload['messages'][0]['role'], 'user')
-        self.assertEqual(payload['messages'][0]['content'], self.test_prompt)
+        self.assertEqual(result, expected)
+        mock_get_llm.assert_called_once_with(self.test_model, call_type='text')
 
     @override_settings(AI_TEXT_MODEL='custom-model')
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_uses_model_from_settings(self, mock_post):
-        mock_post.return_value = _mock_openai_response('test')
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_generate_text_uses_model_from_settings(self, mock_get_llm):
+        mock_get_llm.return_value = _mock_llm()
 
         ai_client.generate_text(self.test_prompt)
 
-        payload = mock_post.call_args[1]['json']
-        self.assertEqual(payload['model'], 'custom-model')
+        mock_get_llm.assert_called_once_with('custom-model', call_type='text')
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_with_http_error_raises_exception(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 500
-        mock_response.raise_for_status.side_effect = HTTPError("500 Server Error")
-        mock_post.return_value = mock_response
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_generate_text_propagates_llm_exception(self, mock_get_llm):
+        mock = Mock()
+        mock.invoke.side_effect = RuntimeError("API unavailable")
+        mock_get_llm.return_value = mock
 
-        with self.assertRaises(HTTPError):
+        with self.assertRaises(RuntimeError):
             ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_with_timeout_raises_exception(self, mock_post):
-        mock_post.side_effect = Timeout("Request timed out")
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_generate_text_propagates_timeout(self, mock_get_llm):
+        mock = Mock()
+        mock.invoke.side_effect = TimeoutError("Request timed out")
+        mock_get_llm.return_value = mock
 
-        with self.assertRaises(Timeout):
+        with self.assertRaises(TimeoutError):
             ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_with_connection_error_raises_exception(self, mock_post):
-        mock_post.side_effect = RequestException("Connection refused")
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_generate_text_propagates_connection_error(self, mock_get_llm):
+        mock = Mock()
+        mock.invoke.side_effect = ConnectionError("Connection refused")
+        mock_get_llm.return_value = mock
 
-        with self.assertRaises(RequestException):
+        with self.assertRaises(ConnectionError):
             ai_client.generate_text(self.test_prompt)
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_analyze_image_with_valid_response_returns_text(self, mock_post):
-        expected_response = "Analysis of the image shows maintenance invoice"
-        mock_post.return_value = _mock_openai_response(expected_response)
+    # ── analyze_image ────────────────────────────────────────────────────────
+
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_analyze_image_with_valid_response_returns_text(self, mock_get_llm):
+        expected = "Analysis of the image shows maintenance invoice"
+        mock_get_llm.return_value = _mock_llm(expected)
 
         result = ai_client.analyze_image(
             self.test_image_base64,
             self.test_prompt,
-            self.test_vision_model
+            self.test_vision_model,
         )
 
-        self.assertEqual(result, expected_response)
-        call_args = mock_post.call_args
-        self.assertIn('/chat/completions', call_args[0][0])
-        payload = call_args[1]['json']
-        self.assertEqual(payload['model'], self.test_vision_model)
-        content = payload['messages'][0]['content']
-        self.assertIsInstance(content, list)
-        self.assertEqual(content[0]['type'], 'text')
-        self.assertEqual(content[1]['type'], 'image_url')
+        self.assertEqual(result, expected)
+        mock_get_llm.assert_called_once_with(self.test_vision_model, call_type='image')
+        # Verify the LLM was invoked with a multimodal message
+        invoke_args = mock_get_llm.return_value.invoke.call_args[0][0]
+        msg_content = invoke_args[0].content
+        self.assertIsInstance(msg_content, list)
+        self.assertEqual(msg_content[0]['type'], 'text')
+        self.assertEqual(msg_content[1]['type'], 'image_url')
 
     @override_settings(AI_VISION_MODEL='custom-vision')
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_analyze_image_uses_model_from_settings(self, mock_post):
-        mock_post.return_value = _mock_openai_response('test')
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_analyze_image_uses_model_from_settings(self, mock_get_llm):
+        mock_get_llm.return_value = _mock_llm()
 
         ai_client.analyze_image(self.test_image_base64, self.test_prompt)
 
-        payload = mock_post.call_args[1]['json']
-        self.assertEqual(payload['model'], 'custom-vision')
+        mock_get_llm.assert_called_once_with('custom-vision', call_type='image')
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_analyze_image_with_http_error_raises_exception(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 503
-        mock_response.raise_for_status.side_effect = HTTPError("503 Service Unavailable")
-        mock_post.return_value = mock_response
+    @patch('ai_assistant.ai_client._get_llm')
+    def test_analyze_image_propagates_llm_exception(self, mock_get_llm):
+        mock = Mock()
+        mock.invoke.side_effect = RuntimeError("Vision model unavailable")
+        mock_get_llm.return_value = mock
 
-        with self.assertRaises(HTTPError):
+        with self.assertRaises(RuntimeError):
             ai_client.analyze_image(self.test_image_base64, self.test_prompt)
 
+    # ── ChatOpenAI instantiation ─────────────────────────────────────────────
+
     @override_settings(AI_BASE_URL='https://custom-api.example.com')
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_uses_custom_base_url_from_settings(self, mock_post):
-        mock_post.return_value = _mock_openai_response('test')
+    @patch('ai_assistant.ai_client.ChatOpenAI')
+    def test_get_llm_uses_custom_base_url_from_settings(self, mock_chat_cls):
+        mock_chat_cls.return_value = _mock_llm()
 
         ai_client.generate_text(self.test_prompt)
 
-        call_url = mock_post.call_args[0][0]
-        self.assertTrue(call_url.startswith('https://custom-api.example.com'))
+        call_kwargs = mock_chat_cls.call_args[1]
+        self.assertTrue(call_kwargs['base_url'].startswith('https://custom-api.example.com'))
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_generate_text_sends_bearer_token(self, mock_post):
-        mock_post.return_value = _mock_openai_response('test')
+    @patch('ai_assistant.ai_client.ChatOpenAI')
+    def test_get_llm_passes_api_key(self, mock_chat_cls):
+        mock_chat_cls.return_value = _mock_llm()
 
         ai_client.generate_text(self.test_prompt)
 
-        headers = mock_post.call_args[1]['headers']
-        self.assertEqual(headers['Authorization'], f'Bearer {MOCK_API_KEY}')
+        call_kwargs = mock_chat_cls.call_args[1]
+        self.assertEqual(call_kwargs['api_key'], MOCK_API_KEY)
 
-    def test_get_base_url_returns_default_when_setting_not_configured(self):
+    @patch('ai_assistant.ai_client.ChatOpenAI')
+    def test_get_llm_passes_enable_thinking_false(self, mock_chat_cls):
+        mock_chat_cls.return_value = _mock_llm()
+
+        ai_client.generate_text(self.test_prompt)
+
+        call_kwargs = mock_chat_cls.call_args[1]
+        extra_body = call_kwargs.get('extra_body', {})
+        self.assertFalse(extra_body['chat_template_kwargs']['enable_thinking'])
+
+    # ── _get_base_url / _get_api_key ─────────────────────────────────────────
+
+    def test_get_base_url_returns_string_starting_with_http(self):
         result = ai_client._get_base_url()
 
         self.assertIsInstance(result, str)
         self.assertTrue(result.startswith('http'))
 
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_get_embedding_returns_vector(self, mock_post):
-        expected_embedding = [0.1, 0.2, 0.3, 0.4, 0.5]
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            'data': [{'embedding': expected_embedding}]
-        }
-        mock_response.raise_for_status = Mock()
-        mock_post.return_value = mock_response
+    def test_get_api_key_raises_when_not_configured(self):
+        with self.assertRaises(ValueError) as ctx:
+            with self.settings(AI_API_KEY=''):
+                ai_client._get_api_key()
+        self.assertIn('AI_API_KEY', str(ctx.exception))
+
+    # ── get_embedding ────────────────────────────────────────────────────────
+
+    @patch('ai_assistant.ai_client.OpenAIEmbeddings')
+    def test_get_embedding_returns_vector(self, mock_emb_cls):
+        expected = [0.1, 0.2, 0.3, 0.4, 0.5]
+        mock_emb = Mock()
+        mock_emb.embed_query.return_value = expected
+        mock_emb_cls.return_value = mock_emb
 
         result = ai_client.get_embedding("test text")
 
-        self.assertEqual(result, expected_embedding)
-        call_args = mock_post.call_args
-        self.assertIn('/embeddings', call_args[0][0])
+        self.assertEqual(result, expected)
+        mock_emb.embed_query.assert_called_once_with("test text")
 
     @override_settings(AI_EMBEDDING_MODEL='custom-embedding-model')
-    @patch('ai_assistant.ai_client.requests.post')
-    def test_get_embedding_uses_model_from_settings(self, mock_post):
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {'data': [{'embedding': [0.1, 0.2]}]}
-        mock_response.raise_for_status = Mock()
-        mock_post.return_value = mock_response
+    @patch('ai_assistant.ai_client.OpenAIEmbeddings')
+    def test_get_embedding_uses_model_from_settings(self, mock_emb_cls):
+        mock_emb = Mock()
+        mock_emb.embed_query.return_value = [0.1, 0.2]
+        mock_emb_cls.return_value = mock_emb
 
         ai_client.get_embedding("test text")
 
-        payload = mock_post.call_args[1]['json']
-        self.assertEqual(payload['model'], 'custom-embedding-model')
-
-    @patch('ai_assistant.ai_client._get_api_key')
-    def test_get_api_key_raises_when_not_configured(self, mock_get_api_key):
-        mock_get_api_key.side_effect = ValueError("AI_API_KEY must be configured in settings")
-
-        with self.assertRaises(ValueError) as ctx:
-            ai_client._get_api_key()
-        self.assertIn('AI_API_KEY', str(ctx.exception))
+        call_kwargs = mock_emb_cls.call_args[1]
+        self.assertEqual(call_kwargs['model'], 'custom-embedding-model')
 
 
 @override_settings(
@@ -299,9 +301,9 @@ class TestAnalyzeAttachmentTask(TestCase):
     def test_analyze_attachment_with_pdf_failure_sets_failed_status(self, mock_analyze_pdf):
         attachment = self._create_pdf_attachment()
         error_message = "Service unavailable"
-        mock_analyze_pdf.side_effect = RequestException(error_message)
+        mock_analyze_pdf.side_effect = RuntimeError(error_message)
 
-        with self.assertRaises(RequestException):
+        with self.assertRaises(RuntimeError):
             analyze_attachment(attachment.id)
 
         attachment.refresh_from_db()
@@ -312,9 +314,9 @@ class TestAnalyzeAttachmentTask(TestCase):
     def test_analyze_attachment_with_image_failure_sets_failed_status(self, mock_analyze_image):
         attachment = self._create_image_attachment()
         error_message = "Vision model not available"
-        mock_analyze_image.side_effect = HTTPError(error_message)
+        mock_analyze_image.side_effect = RuntimeError(error_message)
 
-        with self.assertRaises(HTTPError):
+        with self.assertRaises(RuntimeError):
             analyze_attachment(attachment.id)
 
         attachment.refresh_from_db()

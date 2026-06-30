@@ -1,21 +1,27 @@
-import json
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
-import requests
 from django.conf import settings
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_TIMEOUT = 300
+_log_lock = threading.Lock()
+
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
 
 def _get_log_path() -> Path:
     return Path(settings.BASE_DIR) / 'logs' / 'ai_prompts.log'
 
 
-def _log_interaction(call_type: str, model: str, prompt: str, response: str):
-    """Log AI interactions to file for debugging and auditing."""
+def _log_interaction(call_type: str, model: str, prompt: str, response: str) -> None:
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     separator = '=' * 80
     entry = (
@@ -30,138 +36,158 @@ def _log_interaction(call_type: str, model: str, prompt: str, response: str):
     try:
         log_path = _get_log_path()
         log_path.parent.mkdir(exist_ok=True)
-        with open(log_path, 'a', encoding='utf-8') as f:
-            f.write(entry)
+        with _log_lock:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(entry)
     except Exception:
         logger.exception("Failed to write AI prompt log")
 
 
-DEFAULT_TIMEOUT = 300
+class _AILoggerCallback(BaseCallbackHandler):
+    """LangChain callback that writes every LLM exchange to ai_prompts.log.
+
+    One instance per _get_llm() call ensures call_type is correctly scoped
+    even across concurrent Celery workers.
+    """
+
+    def __init__(self, call_type: str) -> None:
+        super().__init__()
+        self.call_type = call_type
+        self._last_model: str = ''
+        self._last_prompt: str = ''
+
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list],
+        **kwargs: Any,
+    ) -> None:
+        model_kw = serialized.get('kwargs', {})
+        self._last_model = (
+            model_kw.get('model_name', '')
+            or model_kw.get('model', '')
+            or (serialized.get('id') or [''])[-1]
+        )
+
+        parts: list[str] = []
+        for msg_list in messages:
+            for msg in msg_list:
+                role = getattr(msg, 'type', 'unknown')
+                content = msg.content
+                if isinstance(content, list):
+                    # Multimodal: extract text parts, mark image blocks
+                    readable_parts = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get('type') == 'text':
+                                readable_parts.append(block['text'])
+                            elif block.get('type') == 'image_url':
+                                readable_parts.append('[image]')
+                    content = ' '.join(readable_parts)
+                parts.append(f"[{role}] {str(content)[:800]}")
+        self._last_prompt = '\n'.join(parts)
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        try:
+            # ChatGeneration has both .text and .message; .text == .message.content
+            result = response.generations[0][0].text
+        except (IndexError, AttributeError):
+            result = str(response)
+        _log_interaction(self.call_type, self._last_model, self._last_prompt, result)
 
 
-def _get_base_url():
-    """Get the base URL for the OpenAI-compatible API."""
+# ─── Client factory ──────────────────────────────────────────────────────────
+
+def _get_base_url() -> str:
     base = getattr(settings, 'AI_BASE_URL', 'https://leria.gal').rstrip('/')
-    api_path = getattr(settings, 'AI_API_PATH', '/v1')
+    api_path = getattr(settings, 'AI_API_PATH', '/api')
     return f"{base}{api_path}"
 
 
-def _get_api_key():
-    """Get the API key for authentication."""
+def _get_api_key() -> str:
     api_key = getattr(settings, 'AI_API_KEY', '')
     if not api_key:
-        raise ValueError(
-            "AI_API_KEY must be configured in settings"
-        )
+        raise ValueError("AI_API_KEY must be configured in settings")
     return api_key
 
 
-def _get_headers():
-    """Get headers with API key authentication."""
-    api_key = _get_api_key()
-    return {
-        'Content-Type': 'application/json',
-        'Authorization': f'Bearer {api_key}',
-    }
-
-
-def _post_request(url, payload):
-    """Make a POST request to the OpenAI-compatible API."""
-    response = requests.post(
-        url,
-        json=payload,
-        headers=_get_headers(),
+def _get_llm(model: str, call_type: str = 'text') -> ChatOpenAI:
+    """Return a ChatOpenAI instance configured for our OpenAI-compatible endpoint."""
+    return ChatOpenAI(
+        base_url=_get_base_url(),
+        api_key=_get_api_key(),
+        model=model,
         timeout=DEFAULT_TIMEOUT,
+        max_retries=0,
+        # Non-standard param → must go in extra_body (not model_kwargs).
+        # Without this, Qwen generates thousands of internal reasoning tokens → timeout.
+        extra_body={'chat_template_kwargs': {'enable_thinking': False}},
+        callbacks=[_AILoggerCallback(call_type)],
     )
-    if not response.ok:
-        logger.error(
-            "AI API request failed [%s] %s — response body: %s",
-            response.status_code, url, response.text[:500],
-        )
-    response.raise_for_status()
-    return response
 
 
-def get_embedding(text: str, model: str = None) -> list[float]:
-    """Get a vector embedding for text using OpenAI-compatible embeddings API."""
-    if model is None:
-        model = getattr(settings, 'AI_EMBEDDING_MODEL', 'leria:redacta')
-    url = f"{_get_base_url()}/embeddings"
-    payload = {'model': model, 'input': text}
-    response = _post_request(url, payload)
-    data = response.json()
-    # OpenAI-compatible response: {"data": [{"embedding": [...]}]}
-    return data['data'][0]['embedding']
+# ─── Message helpers ─────────────────────────────────────────────────────────
 
+_ROLE_TO_CLASS: dict[str, type] = {
+    'user': HumanMessage,
+    'assistant': AIMessage,
+    'system': SystemMessage,
+}
+
+
+def _to_lc_messages(messages: list[dict]) -> list:
+    """Convert OpenAI-format dicts [{role, content}] to LangChain message objects."""
+    result = []
+    for m in messages:
+        cls = _ROLE_TO_CLASS.get(m['role'])
+        if cls is None:
+            logger.warning("Unknown message role '%s' — skipping", m['role'])
+            continue
+        result.append(cls(content=m['content']))
+    return result
+
+
+# ─── Public API ──────────────────────────────────────────────────────────────
 
 def generate_text(prompt: str, model: str = None) -> str:
-    """Send a text prompt to OpenAI-compatible API and return the generated response."""
+    """Send a single user prompt and return the assistant reply."""
     if model is None:
         model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
-
-    url = f"{_get_base_url()}/chat/completions"
-    payload = {
-        'model': model,
-        'messages': [
-            {'role': 'user', 'content': prompt},
-        ],
-        'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False},
-    }
-    response = _post_request(url, payload)
-    result = response.json()['choices'][0]['message']['content']
-    _log_interaction('text', model, prompt, result)
-    return result
+    llm = _get_llm(model, call_type='text')
+    return llm.invoke([HumanMessage(content=prompt)]).content
 
 
 def analyze_image(image_base64: str, prompt: str, model: str = None) -> str:
-    """Send an image (base64) with a prompt to OpenAI-compatible vision API."""
+    """Send a base64-encoded image with a text prompt and return the assistant reply."""
     if model is None:
         model = getattr(settings, 'AI_VISION_MODEL', 'leria:redacta')
-
-    url = f"{_get_base_url()}/chat/completions"
-    payload = {
-        'model': model,
-        'messages': [
-            {
-                'role': 'user',
-                'content': [
-                    {'type': 'text', 'text': prompt},
-                    {
-                        'type': 'image_url',
-                        'image_url': {
-                            'url': f'data:image/jpeg;base64,{image_base64}',
-                        },
-                    },
-                ],
-            },
-        ],
-        'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False},
-    }
-    response = _post_request(url, payload)
-    result = response.json()['choices'][0]['message']['content']
-    _log_interaction('image', model, prompt, result)
-    return result
+    llm = _get_llm(model, call_type='image')
+    message = HumanMessage(content=[
+        {'type': 'text', 'text': prompt},
+        {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{image_base64}'}},
+    ])
+    return llm.invoke([message]).content
 
 
 def generate_conversation(messages: list[dict], model: str = None) -> str:
-    """Send a full messages list to the chat completions endpoint and return the reply."""
+    """Send a full [{role, content}] history and return the assistant reply."""
     if model is None:
         model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
+    llm = _get_llm(model, call_type='conversation')
+    return llm.invoke(_to_lc_messages(messages)).content
 
-    url = f"{_get_base_url()}/chat/completions"
-    payload = {
-        'model': model,
-        'messages': messages,
-        'stream': False,
-        'chat_template_kwargs': {'enable_thinking': False},
-    }
-    response = _post_request(url, payload)
-    result = response.json()['choices'][0]['message']['content']
-    user_msg = next((m['content'] for m in reversed(messages) if m['role'] == 'user'), '')
-    _log_interaction('conversation', model, user_msg, result)
-    return result
+
+def get_embedding(text: str, model: str = None) -> list[float]:
+    """Return a dense vector embedding for the given text."""
+    if model is None:
+        model = getattr(settings, 'AI_EMBEDDING_MODEL', 'leria:redacta')
+    embeddings = OpenAIEmbeddings(
+        base_url=_get_base_url(),
+        api_key=_get_api_key(),
+        model=model,
+        timeout=DEFAULT_TIMEOUT,
+    )
+    return embeddings.embed_query(text)
 
 
 def chat_with_tools(
@@ -171,56 +197,34 @@ def chat_with_tools(
     model: str = None,
     max_iterations: int = 6,
 ) -> str:
-    """Run a chat completion loop with OpenAI-compatible tool calling.
+    """Run a tool-calling loop until the model returns plain text or max_iterations.
 
-    tool_executor(tool_name, tool_args) must return a JSON string with the result.
-    Loops until the model returns a plain text response or max_iterations is reached.
+    tools: OpenAI-format tool definitions (list of dicts with 'type' and 'function').
+    tool_executor(name, args) must return a JSON string result.
     """
     if model is None:
         model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
 
-    url = f"{_get_base_url()}/chat/completions"
-    current_messages = list(messages)
-    user_message = next(
-        (m['content'] for m in reversed(messages) if m['role'] == 'user'), ''
-    )
+    llm = _get_llm(model, call_type='chat_tools')
+    llm_with_tools = llm.bind_tools(tools)
+    current_messages = _to_lc_messages(messages)
 
     for _ in range(max_iterations):
-        payload = {
-            'model': model,
-            'messages': current_messages,
-            'tools': tools,
-            'stream': False,
-            'chat_template_kwargs': {'enable_thinking': False},
-        }
-        response = _post_request(url, payload)
-        choice = response.json()['choices'][0]
-        assistant_message = choice['message']
+        response: AIMessage = llm_with_tools.invoke(current_messages)
+        current_messages.append(response)
 
-        current_messages.append(assistant_message)
+        if not response.tool_calls:
+            return response.content or ''
 
-        tool_calls = assistant_message.get('tool_calls') or []
-        if not tool_calls:
-            result = assistant_message.get('content', '')
-            _log_interaction('chat_tools', model, user_message, result)
-            return result
+        # Execute every tool call the model requested and append results
+        for tc in response.tool_calls:
+            tool_result = tool_executor(tc['name'], tc['args'])
+            current_messages.append(
+                ToolMessage(content=tool_result, tool_call_id=tc['id'])
+            )
 
-        for tc in tool_calls:
-            tool_name = tc['function']['name']
-            try:
-                tool_args = json.loads(tc['function']['arguments'])
-            except Exception:
-                tool_args = {}
-
-            tool_result = tool_executor(tool_name, tool_args)
-            current_messages.append({
-                'role': 'tool',
-                'tool_call_id': tc['id'],
-                'content': tool_result,
-            })
-
-    # Fallback: return last assistant content if max iterations hit
+    # Max iterations reached — return last non-empty assistant content
     for msg in reversed(current_messages):
-        if msg.get('role') == 'assistant' and msg.get('content'):
-            return msg['content']
+        if isinstance(msg, AIMessage) and msg.content:
+            return msg.content
     return 'No se pudo completar la consulta.'

@@ -200,30 +200,28 @@ def analyze_attachment(self, attachment_id: int):
 
 def _analyze_pdf(attachment, prompt: str):
     """Extract text from PDF and send to Open WebUI text model."""
-    reader = PdfReader(attachment.file.path)
-    text_parts = []
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text_parts.append(page_text)
+    with attachment.file.open('rb') as fh:
+        reader = PdfReader(fh)
+        text_parts = [
+            page.extract_text()
+            for page in reader.pages
+            if page.extract_text()
+        ]
 
     if not text_parts:
         return "No se pudo extraer texto del PDF."
 
     extracted_text = "\n".join(text_parts)
-    # Truncate to avoid exceeding model context
     if len(extracted_text) > 4000:
         extracted_text = extracted_text[:4000] + "\n[...texto truncado]"
 
-    full_prompt = f"{prompt}\n\nTexto del documento:\n{extracted_text}"
-    return generate_text(full_prompt)
+    return generate_text(f"{prompt}\n\nTexto del documento:\n{extracted_text}")
 
 
 def _analyze_image(attachment, prompt: str):
     """Send image to Open WebUI vision model for analysis."""
-    with open(attachment.file.path, 'rb') as f:
-        image_data = base64.b64encode(f.read()).decode('utf-8')
-
+    with attachment.file.open('rb') as fh:
+        image_data = base64.b64encode(fh.read()).decode('utf-8')
     return analyze_image(image_data, prompt)
 
 
@@ -388,12 +386,17 @@ def _chunk_text(text: str, chunk_size: int = 800, overlap: int = 150) -> list[st
 
 def _extract_pdf_text(doc) -> str:
     """Extract plain text from all pages of a PDF document."""
-    reader = PdfReader(doc.file.path)
-    parts = []
-    for i, page in enumerate(reader.pages):
-        page_text = page.extract_text()
-        if page_text and page_text.strip():
-            parts.append(f"[Página {i + 1}]\n{page_text.strip()}")
+    with doc.file.open('rb') as fh:
+        reader = PdfReader(fh)
+        raw_pages = [
+            (i, page.extract_text())
+            for i, page in enumerate(reader.pages)
+        ]
+    parts = [
+        f"[Página {i + 1}]\n{text.strip()}"
+        for i, text in raw_pages
+        if text and text.strip()
+    ]
 
     if not parts:
         return 'No se pudo extraer texto del PDF (puede ser un PDF escaneado sin texto embebido).'
@@ -409,8 +412,8 @@ def _describe_image(doc) -> str:
         "Focus on: maintenance intervals, torque specs, fluid types, part numbers, service schedules. "
         "Respond in the same language as the document."
     )
-    with open(doc.file.path, 'rb') as f:
-        image_data = base64.b64encode(f.read()).decode('utf-8')
+    with doc.file.open('rb') as fh:
+        image_data = base64.b64encode(fh.read()).decode('utf-8')
     return analyze_image(image_data, prompt)
 
 

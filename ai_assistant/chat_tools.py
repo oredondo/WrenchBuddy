@@ -1,5 +1,8 @@
 import json
+from datetime import date
 from decimal import Decimal
+
+from dateutil.relativedelta import relativedelta
 
 from maintenance.models import Accessory, MaintenanceEvent, TaskCatalog
 from vehicles.models import Vehicle
@@ -150,6 +153,74 @@ def _get_accessories(vehicle_id: int) -> str:
         for a in accessories
     ]
     return json.dumps({"accessories": result, "total_invested_eur": total})
+
+
+def _get_maintenance_schedule(vehicle_id: int) -> str:
+    """Pre-computed next-due km and date for every task in the catalog.
+
+    The AI must NOT recalculate these values — use them directly to answer questions
+    about upcoming maintenance, km remaining, or overdue tasks.
+    """
+    vehicle = Vehicle.objects.get(id=vehicle_id)
+    current_km = vehicle.current_km
+    today = date.today()
+
+    tasks = list(TaskCatalog.objects.filter(vehicle_id=vehicle_id))
+
+    # Last event per task_code (single query, most recent first)
+    last_events: dict[str, MaintenanceEvent] = {}
+    for ev in MaintenanceEvent.objects.filter(vehicle_id=vehicle_id).order_by('-date'):
+        if ev.task_code not in last_events:
+            last_events[ev.task_code] = ev
+
+    schedule = []
+    for task in tasks:
+        last = last_events.get(task.task_code)
+        entry: dict = {
+            "task_code": task.task_code,
+            "name": task.name,
+            "safety_critical": task.is_safety_critical,
+            "interval_km": task.interval_km,
+            "interval_months": task.interval_months,
+            "last_service_km": last.km_at_service if last else None,
+            "last_service_date": str(last.date) if last else None,
+        }
+
+        # ── KM-based projection ──────────────────────────────────────────────
+        if task.interval_km:
+            if last:
+                next_km = last.km_at_service + task.interval_km
+                remaining = next_km - current_km
+                entry["next_due_km"] = next_km
+                entry["km_remaining"] = remaining
+                entry["km_status"] = (
+                    "OVERDUE" if remaining <= 0
+                    else "DUE_SOON" if remaining <= 500
+                    else "OK"
+                )
+            else:
+                entry["next_due_km"] = "unknown — never serviced"
+                entry["km_status"] = "NEVER_DONE"
+
+        # ── Date-based projection ────────────────────────────────────────────
+        if task.interval_months:
+            if last:
+                next_date = last.date + relativedelta(months=task.interval_months)
+                days_left = (next_date - today).days
+                entry["next_due_date"] = str(next_date)
+                entry["days_remaining"] = days_left
+                entry["date_status"] = (
+                    "OVERDUE" if days_left <= 0
+                    else "DUE_SOON" if days_left <= 30
+                    else "OK"
+                )
+            else:
+                entry["next_due_date"] = "unknown — never serviced"
+                entry["date_status"] = "NEVER_DONE"
+
+        schedule.append(entry)
+
+    return json.dumps(schedule, ensure_ascii=False)
 
 
 def _get_spending_summary(vehicle_id: int) -> str:

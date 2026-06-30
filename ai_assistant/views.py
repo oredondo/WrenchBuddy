@@ -31,13 +31,16 @@ class AIChatView(APIView):
         system_prompt = (
             f"You are WrenchBuddy, a vehicle maintenance assistant. "
             f"You help the owner of a {vehicle.year} {vehicle.brand} {vehicle.model}.\n"
-            "You have tools to query the vehicle's real maintenance database. "
-            "Use them to give accurate, data-driven answers.\n"
+            "You have access to the vehicle's real maintenance database injected below.\n"
             "Rules:\n"
             "- Always reply in the same language the user writes (Spanish if they write in Spanish).\n"
             "- For safety-critical issues (brakes, tires, steering) always recommend professional inspection.\n"
             "- Be precise with numbers: km, costs, dates.\n"
-            "- If data is missing, say so clearly."
+            "- If data is missing, say so clearly.\n"
+            "- MAINTENANCE SCHEDULE section contains pre-computed next-due km and dates. "
+            "  Use those values DIRECTLY — do NOT recalculate from history. "
+            "  next_due_km = last_service_km + interval_km is already done for you. "
+            "  km_remaining = next_due_km - current_km is already done for you."
         )
 
         messages = [{'role': 'system', 'content': system_prompt}]
@@ -48,15 +51,17 @@ class AIChatView(APIView):
 
         try:
             from ai_assistant.chat_tools import (
-                _get_accessories, _get_maintenance_history,
+                _get_accessories, _get_maintenance_history, _get_maintenance_schedule,
                 _get_spending_summary, _get_task_catalog, _get_vehicle_info,
             )
             context = "\n".join([
                 "=== VEHICLE INFO ===",
                 _get_vehicle_info(vehicle_id),
+                "=== MAINTENANCE SCHEDULE (pre-computed — next due km/date and status per task) ===",
+                _get_maintenance_schedule(vehicle_id),
                 "=== MAINTENANCE HISTORY (last 50, most recent first) ===",
                 _get_maintenance_history(vehicle_id, 50),
-                "=== TASK CATALOG ===",
+                "=== TASK CATALOG (intervals only, schedule already computed above) ===",
                 _get_task_catalog(vehicle_id),
                 "=== ACCESSORIES ===",
                 _get_accessories(vehicle_id),

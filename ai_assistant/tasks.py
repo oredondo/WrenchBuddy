@@ -6,33 +6,12 @@ import re
 from celery import shared_task
 from PyPDF2 import PdfReader
 
-from ai_assistant.ai_client import generate_text, analyze_image, get_embedding
-from ai_assistant.parsers import parse_catalog_items
+from ai_assistant.ai_client import generate_text, analyze_image, get_embedding, get_structured_chain
+from ai_assistant.schemas import TaskCatalogList, InvoiceAnalysis, NormalizedTask
+from ai_assistant.prompts import CATALOG_GENERATION_PROMPT, INVOICE_ANALYSIS_PROMPT, NORMALIZE_PROMPT
 
 logger = logging.getLogger(__name__)
 
-
-
-CATALOG_GENERATION_PROMPT = """You are a motorcycle/vehicle maintenance expert.
-Generate a maintenance task catalog for the following vehicle.
-Respond ONLY with a valid JSON array (no additional text, no markdown fences).
-
-Each item must have these fields:
-- task_code: snake_case identifier (e.g. "oil_change")
-- name: short human-readable name
-- description: brief description of what the task involves
-- interval_km: km interval (integer or null)
-- interval_months: month interval (integer or null)
-- is_safety_critical: true or false
-
-Generate between 8 and 15 tasks appropriate for this vehicle.
-
-Vehicle info:
-{vehicle_info}
-
-{community_section}
-{document_section}
-Respond with ONLY the JSON array."""
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
@@ -82,64 +61,37 @@ def generate_vehicle_catalog(self, vehicle_id: int):
     # RAG: retrieve the most relevant chunks from vehicle documents via vector search
     document_section = _retrieve_document_context(vehicle)
 
-    prompt = CATALOG_GENERATION_PROMPT.format(
-        vehicle_info=vehicle_info,
-        community_section=community_section,
-        document_section=document_section,
-    )
-
     try:
-        raw_text = generate_text(prompt)
+        chain = get_structured_chain(TaskCatalogList, CATALOG_GENERATION_PROMPT)
+        result = chain.invoke({
+            "vehicle_info": vehicle_info,
+            "community_section": community_section,
+            "document_section": document_section,
+        })
     except Exception as exc:
         logger.exception("Failed to generate catalog for vehicle %s", vehicle_id)
         raise self.retry(exc=exc)
 
-    items = parse_catalog_items(raw_text)
-    if not items:
-        logger.warning("No catalog items parsed for vehicle %s. Raw: %s", vehicle_id, raw_text[:200])
+    if not result or not result.tasks:
+        logger.warning("No catalog items parsed for vehicle %s.", vehicle_id)
         return
 
     catalog_objects = [
         TaskCatalog(
             vehicle=vehicle,
-            task_code=item['task_code'],
-            name=item['name'],
-            description=item['description'],
-            interval_km=item['interval_km'],
-            interval_months=item['interval_months'],
-            is_safety_critical=item['is_safety_critical'],
+            task_code=item.task_code,
+            name=item.name,
+            description=item.description,
+            interval_km=item.interval_km,
+            interval_months=item.interval_months,
+            is_safety_critical=item.is_safety_critical,
             source=TaskCatalog.Source.AI_GENERATED,
         )
-        for item in items
+        for item in result.tasks
     ]
 
     created = TaskCatalog.objects.bulk_create(catalog_objects, ignore_conflicts=True)
     logger.info("Created %d catalog entries for vehicle %s", len(created), vehicle_id)
-
-_ANALYSIS_PROMPT_TEMPLATE = (
-    "Analyze this vehicle maintenance document. "
-    "Extract the information and respond ONLY with valid JSON (no additional text) "
-    "using this structure:\n\n"
-    "{{\n"
-    '  "tipo_servicio": "Description of the service performed",\n'
-    '  "task_codes": ["oil_change"],\n'
-    '  "km": 15000,\n'
-    '  "coste_total": 75.50,\n'
-    '  "fecha": "2026-01-15",\n'
-    '  "taller": "Workshop name",\n'
-    '  "piezas": ["Oil filter", "10W40 oil 4L"],\n'
-    '  "observaciones": "Relevant notes"\n'
-    "}}\n\n"
-    "Valid task_codes: {valid_codes}.\n"
-    "You may include multiple task_codes if the document reflects multiple services.\n"
-    'If any data is not available, use "No disponible" for text fields or null for numbers.'
-)
-
-
-def _build_analysis_prompt(valid_codes: list[str]) -> str:
-    codes_str = ", ".join(valid_codes) if valid_codes else "oil_change, chain_service, tire_check, brake_check, coolant_change, spark_plugs, air_filter, itv"
-    return _ANALYSIS_PROMPT_TEMPLATE.format(valid_codes=codes_str)
-
 
 def _update_attachment(attachment_id, **fields):
     """Atomic update via queryset to avoid Django 6 NotUpdated errors."""
@@ -165,18 +117,19 @@ def analyze_attachment(self, attachment_id: int):
     valid_codes = list(
         TaskCatalog.objects.filter(vehicle=vehicle).values_list('task_code', flat=True)
     )
-    prompt = _build_analysis_prompt(valid_codes)
 
     try:
         if attachment.file_type == EventAttachment.FileType.PDF:
-            result = _analyze_pdf(attachment, prompt)
+            result_obj = _analyze_pdf(attachment, valid_codes)
         else:
-            result = _analyze_image(attachment, prompt)
+            result_obj = _analyze_image(attachment, valid_codes)
+
+        result_json = result_obj.model_dump_json()
 
         _update_attachment(
             attachment_id,
             analysis_status=EventAttachment.AnalysisStatus.COMPLETED,
-            analysis_result=result,
+            analysis_result=result_json,
             analysis_error=None,
         )
         logger.info("Attachment %s analyzed successfully", attachment_id)
@@ -185,7 +138,7 @@ def analyze_attachment(self, attachment_id: int):
         attachment_analysis_completed.send(
             sender=analyze_attachment,
             attachment_id=attachment_id,
-            analysis_result=result,
+            analysis_result=result_json,
         )
 
     except Exception as exc:
@@ -198,7 +151,7 @@ def analyze_attachment(self, attachment_id: int):
         raise self.retry(exc=exc)
 
 
-def _analyze_pdf(attachment, prompt: str):
+def _analyze_pdf(attachment, valid_codes: list[str]) -> InvoiceAnalysis:
     """Extract text from PDF and send to Open WebUI text model."""
     with attachment.file.open('rb') as fh:
         reader = PdfReader(fh)
@@ -209,20 +162,42 @@ def _analyze_pdf(attachment, prompt: str):
         ]
 
     if not text_parts:
-        return "No se pudo extraer texto del PDF."
+        return InvoiceAnalysis(tipo_servicio="No se pudo extraer texto del PDF.", task_codes=[], piezas=[])
+
 
     extracted_text = "\n".join(text_parts)
     if len(extracted_text) > 4000:
         extracted_text = extracted_text[:4000] + "\n[...texto truncado]"
 
-    return generate_text(f"{prompt}\n\nTexto del documento:\n{extracted_text}")
+    chain = get_structured_chain(InvoiceAnalysis, INVOICE_ANALYSIS_PROMPT)
+    return chain.invoke({
+        "valid_codes": ", ".join(valid_codes) if valid_codes else "oil_change, chain_service, tire_check, brake_check, coolant_change, spark_plugs, air_filter, itv",
+        "document_text": extracted_text,
+    })
 
 
-def _analyze_image(attachment, prompt: str):
+def _analyze_image(attachment, valid_codes: list[str]) -> InvoiceAnalysis:
     """Send image to Open WebUI vision model for analysis."""
     with attachment.file.open('rb') as fh:
         image_data = base64.b64encode(fh.read()).decode('utf-8')
-    return analyze_image(image_data, prompt)
+    
+    prompt_str = f"Analyze this vehicle maintenance document. Extract the information. Valid task codes: {', '.join(valid_codes) if valid_codes else 'oil_change, chain_service, tire_check, brake_check, coolant_change, spark_plugs, air_filter, itv'}."
+    
+    from langchain_core.messages import SystemMessage, HumanMessage
+    messages = [
+        SystemMessage(content="You are a vehicle maintenance expert. Extract information from the image and respond with the requested structured schema."),
+        HumanMessage(content=[
+            {"type": "text", "text": prompt_str},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+        ])
+    ]
+    
+    from ai_assistant.ai_client import _get_llm
+    from django.conf import settings
+    model = getattr(settings, 'AI_VISION_MODEL', 'leria:redacta')
+    llm = _get_llm(model, call_type='structured_image')
+    structured_llm = llm.with_structured_output(InvoiceAnalysis)
+    return structured_llm.invoke(messages)
 
 
 @shared_task
@@ -417,26 +392,6 @@ def _describe_image(doc) -> str:
     return analyze_image(image_data, prompt)
 
 
-_NORMALIZE_PROMPT = """\
-You are a vehicle maintenance assistant. Normalize the following user-provided maintenance task.
-
-Input: "{input}"
-
-Return ONLY valid JSON (no markdown, no extra text):
-{{"task_code": "english_snake_case_code", "name": "Short name in the same language as the input"}}
-
-Rules for task_code:
-- Lowercase English words separated by underscores
-- 1 to 4 words, concise
-- Follow patterns like: oil_change, brake_check, chain_service, spark_plugs, air_filter, tire_rotation, coolant_change, valve_clearance
-
-Examples:
-- "cambio de aceite" → {{"task_code": "oil_change", "name": "Cambio de aceite"}}
-- "revisión frenos" → {{"task_code": "brake_check", "name": "Revisión de frenos"}}
-- "chain lube" → {{"task_code": "chain_service", "name": "Chain Lubrication"}}
-- "cambio_aceite" → {{"task_code": "oil_change", "name": "Cambio de aceite"}}"""
-
-
 def _slugify_fallback(text: str) -> str:
     """Simple ASCII slugify used when AI is unavailable."""
     slug = re.sub(r'[^a-z0-9]+', '_', text.lower().strip())
@@ -456,22 +411,19 @@ def normalize_task_code(self, event_id: int):
         return
 
     original = event.task_code
-    prompt = _NORMALIZE_PROMPT.format(input=original)
 
     normalized_code = None
     normalized_name = None
     try:
-        raw = generate_text(prompt).strip()
-        # Strip markdown fences if present
-        raw = re.sub(r'^```(?:json)?\s*\n?', '', raw)
-        raw = re.sub(r'\n?```\s*$', '', raw).strip()
-        data = json.loads(raw)
-        code = data.get('task_code', '').strip().lower()
+        chain = get_structured_chain(NormalizedTask, NORMALIZE_PROMPT)
+        result = chain.invoke({"input": original})
+        
+        code = result.task_code.strip().lower()
         code = re.sub(r'[^a-z0-9_]', '', code)
         code = re.sub(r'_+', '_', code).strip('_')
         if code:
             normalized_code = code
-            normalized_name = str(data.get('name', '') or '').strip() or code.replace('_', ' ').title()
+            normalized_name = result.name.strip() or code.replace('_', ' ').title()
     except Exception:
         logger.warning("normalize_task_code: AI failed for '%s', using slugify fallback", original)
 
@@ -505,3 +457,4 @@ def normalize_task_code(self, event_id: int):
         "normalize_task_code: event %s '%s' → '%s'",
         event_id, original, normalized_code,
     )
+

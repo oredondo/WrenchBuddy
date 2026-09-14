@@ -503,7 +503,7 @@ class TestVehicleListSerializer:
         serializer = VehicleListSerializer(motorcycle)
 
         # Assert
-        expected_fields = {'id', 'vehicle_type', 'brand', 'model', 'year', 'current_km'}
+        expected_fields = {'id', 'vehicle_type', 'brand', 'model', 'year', 'current_km', 'is_public'}
         assert set(serializer.data.keys()) == expected_fields
 
     def test_serialize_vehicle_excludes_detailed_fields(self, motorcycle):

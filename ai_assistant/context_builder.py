@@ -136,3 +136,46 @@ Current odometer: {vehicle_info['current_km']} km
 
 === LAST MAINTENANCE PER TASK ===
 {events_text}{community_section}"""
+
+
+def retrieve_relevant_document_chunks(vehicle_id: int, query: str, limit: int = 5) -> str:
+    """Retrieve the most relevant document chunks for a given user query using pgvector."""
+    from vehicles.models import DocumentChunk, VehicleDocument
+    from pgvector.django import CosineDistance
+    from ai_assistant.ai_client import get_embedding
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    has_chunks = DocumentChunk.objects.filter(
+        document__vehicle_id=vehicle_id,
+        document__extraction_status=VehicleDocument.ExtractionStatus.COMPLETED,
+    ).exists()
+
+    if not has_chunks:
+        return ''
+
+    try:
+        query_vec = get_embedding(query)
+    except Exception:
+        logger.exception("Failed to embed query for RAG chat context: %s", query)
+        return ''
+
+    chunks = (
+        DocumentChunk.objects
+        .filter(
+            document__vehicle_id=vehicle_id,
+            document__extraction_status=VehicleDocument.ExtractionStatus.COMPLETED,
+        )
+        .order_by(CosineDistance('embedding', query_vec))[:limit]
+    )
+
+    if not chunks:
+        return ''
+
+    lines = ['=== VEHICLE MANUALS & DOCUMENTS (Relevant Excerpts) ===']
+    for chunk in chunks:
+        label = chunk.document.description or chunk.document.original_filename
+        lines.append(f"[{label} - Chunk {chunk.chunk_index}]:\n{chunk.text}")
+    return '\n\n'.join(lines)
+

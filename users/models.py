@@ -20,6 +20,18 @@ class CustomUser(AbstractUser):
     avatar        = models.ImageField(upload_to=avatar_path, null=True, blank=True)
     show_spending = models.BooleanField(default=False)
 
+    class LanguageChoices(models.TextChoices):
+        SPANISH = 'es', 'Español'
+        ENGLISH = 'en', 'English'
+
+    preferred_language = models.CharField(
+        max_length=5,
+        choices=LanguageChoices.choices,
+        default=LanguageChoices.SPANISH,
+        help_text="User's preferred language for AI responses and interface."
+    )
+
+
     class Meta:
         db_table = 'users'
         verbose_name = 'Usuario'

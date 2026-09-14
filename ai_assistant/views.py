@@ -28,33 +28,29 @@ class AIChatView(APIView):
 
         history = request.data.get('history') or []
 
-        system_prompt = (
-            f"You are WrenchBuddy, a vehicle maintenance assistant. "
-            f"You help the owner of a {vehicle.year} {vehicle.brand} {vehicle.model}.\n"
-            "You have access to the vehicle's real maintenance database injected below.\n"
-            "Rules:\n"
-            "- Always reply in the same language the user writes (Spanish if they write in Spanish).\n"
-            "- For safety-critical issues (brakes, tires, steering) always recommend professional inspection.\n"
-            "- Be precise with numbers: km, costs, dates.\n"
-            "- If data is missing, say so clearly.\n"
-            "- MAINTENANCE SCHEDULE section contains pre-computed next-due km and dates. "
-            "  Use those values DIRECTLY — do NOT recalculate from history. "
-            "  next_due_km = last_service_km + interval_km is already done for you. "
-            "  km_remaining = next_due_km - current_km is already done for you."
-        )
-
-        messages = [{'role': 'system', 'content': system_prompt}]
+        # Convert the history list to LangChain message format
+        from langchain_core.messages import AIMessage, HumanMessage
+        chat_history = []
         for msg in history[-10:]:
-            if msg.get('role') in ('user', 'assistant') and msg.get('content'):
-                messages.append({'role': msg['role'], 'content': msg['content']})
-        messages.append({'role': 'user', 'content': message})
+            if msg.get('role') == 'user' and msg.get('content'):
+                chat_history.append(HumanMessage(content=msg.get('content', '')))
+            elif msg.get('role') == 'assistant' and msg.get('content'):
+                chat_history.append(AIMessage(content=msg.get('content', '')))
+
+        from ai_assistant.prompts import CHAT_SYSTEM_PROMPT
+        from ai_assistant.ai_client import _get_llm
+        from django.conf import settings
 
         try:
             from ai_assistant.chat_tools import (
                 _get_accessories, _get_maintenance_history, _get_maintenance_schedule,
                 _get_spending_summary, _get_task_catalog, _get_vehicle_info,
             )
-            context = "\n".join([
+            from ai_assistant.context_builder import retrieve_relevant_document_chunks
+
+            rag_context = retrieve_relevant_document_chunks(vehicle_id, message, limit=5)
+
+            context_parts = [
                 "=== VEHICLE INFO ===",
                 _get_vehicle_info(vehicle_id),
                 "=== MAINTENANCE SCHEDULE (pre-computed — next due km/date and status per task) ===",
@@ -67,12 +63,32 @@ class AIChatView(APIView):
                 _get_accessories(vehicle_id),
                 "=== SPENDING SUMMARY ===",
                 _get_spending_summary(vehicle_id),
-            ])
-            messages[0]['content'] += f"\n\nCURRENT DATABASE CONTEXT (live data):\n{context}"
+            ]
+            if rag_context:
+                context_parts.append(rag_context)
 
-            from ai_assistant.ai_client import generate_conversation
-            reply = generate_conversation(messages)
-            return Response({'response': reply})
+            context = "\n".join(context_parts)
+
+            model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
+            llm = _get_llm(model, call_type='conversation')
+            
+            # Map preferred language
+            lang_code = request.user.preferred_language
+            language_name = 'Spanish' if lang_code == 'es' else 'English'
+
+            chain = CHAT_SYSTEM_PROMPT | llm
+            response_msg = chain.invoke({
+                "year": vehicle.year,
+                "brand": vehicle.brand,
+                "model": vehicle.model,
+                "database_context": context,
+                "chat_history": chat_history,
+                "input_message": message,
+                "language_name": language_name
+            })
+            
+            return Response({'response': response_msg.content})
         except Exception:
             logger.exception("AIChatView error vehicle=%s", vehicle_id)
             return Response({'detail': 'Error al consultar la IA.'}, status=502)
+

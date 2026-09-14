@@ -15,7 +15,9 @@ from ai_assistant.handlers import handle_analysis_completed
 from ai_assistant.parsers import parse_analysis_result, ParsedAnalysis
 from ai_assistant.signals import attachment_analysis_completed
 from ai_assistant.tasks import analyze_attachment, retry_failed_analyses, _analyze_pdf, _analyze_image
+from ai_assistant.schemas import InvoiceAnalysis
 from maintenance.models import EventAttachment, MaintenanceEvent
+
 from users.models import CustomUser
 from vehicles.models import Vehicle
 
@@ -204,7 +206,8 @@ class TestAIClient(SimpleTestCase):
 
 @override_settings(
     CELERY_TASK_ALWAYS_EAGER=True,
-    CELERY_TASK_EAGER_PROPAGATES=True
+    CELERY_TASK_EAGER_PROPAGATES=True,
+    AI_API_KEY=MOCK_API_KEY
 )
 class TestAnalyzeAttachmentTask(TestCase):
     """Tests for analyze_attachment Celery task."""
@@ -264,7 +267,7 @@ class TestAnalyzeAttachmentTask(TestCase):
     @patch('ai_assistant.tasks._analyze_pdf')
     def test_analyze_attachment_with_pdf_sets_processing_status(self, mock_analyze_pdf):
         attachment = self._create_pdf_attachment()
-        mock_analyze_pdf.return_value = "Analyzed PDF content"
+        mock_analyze_pdf.return_value = InvoiceAnalysis(tipo_servicio="Analyzed PDF content", task_codes=[], piezas=[])
 
         analyze_attachment(attachment.id)
 
@@ -274,8 +277,18 @@ class TestAnalyzeAttachmentTask(TestCase):
     @patch('ai_assistant.tasks._analyze_pdf')
     def test_analyze_attachment_with_pdf_success_updates_result(self, mock_analyze_pdf):
         attachment = self._create_pdf_attachment()
-        expected_result = "Service type: Oil change\nCost: 75.50 EUR\nDate: 15/01/2026"
-        mock_analyze_pdf.return_value = expected_result
+        expected_obj = InvoiceAnalysis(
+            tipo_servicio="Oil change",
+            task_codes=["oil_change"],
+            km=15000,
+            coste_total=75.50,
+            fecha="2026-01-15",
+            taller="Workshop name",
+            piezas=["Oil filter", "10W40 oil 4L"],
+            observaciones="Relevant notes"
+        )
+        mock_analyze_pdf.return_value = expected_obj
+        expected_result = expected_obj.model_dump_json()
 
         analyze_attachment(attachment.id)
 
@@ -287,8 +300,13 @@ class TestAnalyzeAttachmentTask(TestCase):
     @patch('ai_assistant.tasks._analyze_image')
     def test_analyze_attachment_with_image_success_updates_result(self, mock_analyze_image):
         attachment = self._create_image_attachment()
-        expected_result = "Invoice from workshop showing brake service"
-        mock_analyze_image.return_value = expected_result
+        expected_obj = InvoiceAnalysis(
+            tipo_servicio="Brake service",
+            task_codes=["brake_check"],
+            piezas=["Brake pads"]
+        )
+        mock_analyze_image.return_value = expected_obj
+        expected_result = expected_obj.model_dump_json()
 
         analyze_attachment(attachment.id)
 
@@ -330,7 +348,7 @@ class TestAnalyzeAttachmentTask(TestCase):
         attachment.analysis_error = "Previous error"
         attachment.save()
 
-        mock_analyze_pdf.return_value = "Success result"
+        mock_analyze_pdf.return_value = InvoiceAnalysis(tipo_servicio="Success result", task_codes=[], piezas=[])
 
         analyze_attachment(attachment.id)
 
@@ -338,9 +356,9 @@ class TestAnalyzeAttachmentTask(TestCase):
         self.assertEqual(attachment.analysis_status, EventAttachment.AnalysisStatus.COMPLETED)
         self.assertIsNone(attachment.analysis_error)
 
-    @patch('ai_assistant.tasks.generate_text')
+    @patch('ai_assistant.tasks.get_structured_chain')
     @patch('ai_assistant.tasks.PdfReader')
-    def test_analyze_pdf_with_valid_pdf_extracts_text_and_calls_ai(self, mock_pdf_reader, mock_generate_text):
+    def test_analyze_pdf_with_valid_pdf_extracts_text_and_calls_ai(self, mock_pdf_reader, mock_get_structured_chain):
         attachment = self._create_pdf_attachment()
 
         mock_page1 = Mock()
@@ -352,22 +370,24 @@ class TestAnalyzeAttachmentTask(TestCase):
         mock_reader_instance.pages = [mock_page1, mock_page2]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        expected_ai_response = "Analyzed invoice data"
-        mock_generate_text.return_value = expected_ai_response
+        expected_obj = InvoiceAnalysis(tipo_servicio="Oil change", task_codes=["oil_change"], piezas=[])
+        mock_chain = Mock()
+        mock_chain.invoke.return_value = expected_obj
+        mock_get_structured_chain.return_value = mock_chain
 
-        result = _analyze_pdf(attachment, "test prompt")
+        result = _analyze_pdf(attachment, ["oil_change"])
 
-        self.assertEqual(result, expected_ai_response)
+        self.assertEqual(result, expected_obj)
         mock_pdf_reader.assert_called_once()
-        mock_generate_text.assert_called_once()
+        mock_get_structured_chain.assert_called_once()
 
-        prompt = mock_generate_text.call_args[0][0]
-        self.assertIn("Invoice for oil change service", prompt)
-        self.assertIn("Total: 75.50 EUR", prompt)
+        prompt_data = mock_chain.invoke.call_args[0][0]
+        self.assertIn("Invoice for oil change service", prompt_data["document_text"])
+        self.assertIn("Total: 75.50 EUR", prompt_data["document_text"])
 
-    @patch('ai_assistant.tasks.generate_text')
+    @patch('ai_assistant.tasks.get_structured_chain')
     @patch('ai_assistant.tasks.PdfReader')
-    def test_analyze_pdf_with_empty_pdf_returns_no_text_message(self, mock_pdf_reader, mock_generate_text):
+    def test_analyze_pdf_with_empty_pdf_returns_no_text_message(self, mock_pdf_reader, mock_get_structured_chain):
         attachment = self._create_pdf_attachment()
 
         mock_page = Mock()
@@ -377,14 +397,14 @@ class TestAnalyzeAttachmentTask(TestCase):
         mock_reader_instance.pages = [mock_page]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        result = _analyze_pdf(attachment, "test prompt")
+        result = _analyze_pdf(attachment, ["oil_change"])
 
-        self.assertEqual(result, "No se pudo extraer texto del PDF.")
-        mock_generate_text.assert_not_called()
+        self.assertEqual(result.tipo_servicio, "No se pudo extraer texto del PDF.")
+        mock_get_structured_chain.assert_not_called()
 
-    @patch('ai_assistant.tasks.generate_text')
+    @patch('ai_assistant.tasks.get_structured_chain')
     @patch('ai_assistant.tasks.PdfReader')
-    def test_analyze_pdf_truncates_long_text(self, mock_pdf_reader, mock_generate_text):
+    def test_analyze_pdf_truncates_long_text(self, mock_pdf_reader, mock_get_structured_chain):
         attachment = self._create_pdf_attachment()
 
         long_text = "A" * 5000
@@ -395,28 +415,38 @@ class TestAnalyzeAttachmentTask(TestCase):
         mock_reader_instance.pages = [mock_page]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        mock_generate_text.return_value = "Analysis"
+        mock_chain = Mock()
+        mock_chain.invoke.return_value = InvoiceAnalysis(tipo_servicio="Analysis", task_codes=[], piezas=[])
+        mock_get_structured_chain.return_value = mock_chain
 
-        result = _analyze_pdf(attachment, "test prompt")
+        result = _analyze_pdf(attachment, ["oil_change"])
 
-        prompt = mock_generate_text.call_args[0][0]
-        self.assertIn("[...texto truncado]", prompt)
-        self.assertLess(len(prompt), 5500)
+        prompt_data = mock_chain.invoke.call_args[0][0]
+        self.assertIn("[...texto truncado]", prompt_data["document_text"])
+        self.assertLess(len(prompt_data["document_text"]), 5500)
 
-    @patch('ai_assistant.tasks.analyze_image')
+    @patch('ai_assistant.ai_client._get_llm')
     @patch('builtins.open', new_callable=mock_open, read_data=b'fake_image_binary_data')
-    def test_analyze_image_reads_file_and_calls_vision(self, mock_file, mock_analyze_image):
+    def test_analyze_image_reads_file_and_calls_vision(self, mock_file, mock_get_llm):
         attachment = self._create_image_attachment()
-        expected_result = "Image shows maintenance receipt"
-        mock_analyze_image.return_value = expected_result
+        expected_obj = InvoiceAnalysis(tipo_servicio="Image shows maintenance receipt", task_codes=[], piezas=[])
+        
+        mock_structured_llm = Mock()
+        mock_structured_llm.invoke.return_value = expected_obj
+        mock_llm = Mock()
+        mock_llm.with_structured_output.return_value = mock_structured_llm
+        mock_get_llm.return_value = mock_llm
 
-        result = _analyze_image(attachment, "test prompt")
+        result = _analyze_image(attachment, ["oil_change"])
 
-        self.assertEqual(result, expected_result)
-        mock_analyze_image.assert_called_once()
+        self.assertEqual(result, expected_obj)
+        mock_get_llm.assert_called_once()
+        mock_llm.with_structured_output.assert_called_once_with(InvoiceAnalysis)
 
-        image_base64 = mock_analyze_image.call_args[0][0]
-        self.assertIsInstance(image_base64, str)
+        call_messages = mock_structured_llm.invoke.call_args[0][0]
+        human_msg = call_messages[1]
+        image_url = human_msg.content[1]['image_url']['url']
+        image_base64 = image_url.split(',')[1]
         decoded = base64.b64decode(image_base64)
         self.assertEqual(decoded, b'fake_image_binary_data')
 
@@ -546,6 +576,7 @@ class TestRetryFailedAnalysesTask(TestCase):
         mock_delay.assert_called_once_with(failed_attachment.id)
 
 
+@override_settings(AI_API_KEY=MOCK_API_KEY)
 class TestAnalyzeAttachmentEdgeCases(TestCase):
     """Additional edge case tests for attachment analysis."""
 
@@ -583,7 +614,7 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
         mock_pdf_reader.side_effect = Exception("PDF is corrupted")
 
         with self.assertRaises(Exception) as context:
-            _analyze_pdf(attachment, "test prompt")
+            _analyze_pdf(attachment, ["tire_check"])
 
         self.assertIn("PDF is corrupted", str(context.exception))
 
@@ -600,13 +631,13 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
         mock_open_file.side_effect = IOError("Cannot read file")
 
         with self.assertRaises(IOError) as context:
-            _analyze_image(attachment, "test prompt")
+            _analyze_image(attachment, ["tire_check"])
 
         self.assertIn("Cannot read file", str(context.exception))
 
-    @patch('ai_assistant.tasks.generate_text')
+    @patch('ai_assistant.tasks.get_structured_chain')
     @patch('ai_assistant.tasks.PdfReader')
-    def test_analyze_pdf_with_multiple_empty_pages_returns_no_text(self, mock_pdf_reader, mock_generate_text):
+    def test_analyze_pdf_with_multiple_empty_pages_returns_no_text(self, mock_pdf_reader, mock_get_structured_chain):
         pdf_file = SimpleUploadedFile("empty.pdf", b'content', content_type="application/pdf")
         attachment = EventAttachment.objects.create(
             event=self.event,
@@ -621,7 +652,56 @@ class TestAnalyzeAttachmentEdgeCases(TestCase):
         mock_reader_instance.pages = [empty_page, empty_page, empty_page]
         mock_pdf_reader.return_value = mock_reader_instance
 
-        result = _analyze_pdf(attachment, "test prompt")
+        result = _analyze_pdf(attachment, ["tire_check"])
 
-        self.assertEqual(result, "No se pudo extraer texto del PDF.")
-        mock_generate_text.assert_not_called()
+        self.assertEqual(result.tipo_servicio, "No se pudo extraer texto del PDF.")
+        mock_get_structured_chain.assert_not_called()
+
+
+from ai_assistant.context_builder import retrieve_relevant_document_chunks
+
+@override_settings(AI_API_KEY=MOCK_API_KEY)
+class TestRetrieveRelevantDocumentChunks(TestCase):
+    """Tests for retrieve_relevant_document_chunks function."""
+
+    def setUp(self):
+        self.user = CustomUser.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpass123'
+        )
+        self.vehicle = Vehicle.objects.create(
+            user=self.user,
+            vehicle_type='motorcycle',
+            brand='Honda',
+            model='CBR600RR',
+            year=2020,
+            current_km=15000,
+        )
+
+    def test_retrieve_with_no_chunks_returns_empty_string(self):
+        result = retrieve_relevant_document_chunks(self.vehicle.id, "test query")
+        self.assertEqual(result, '')
+
+    @patch('ai_assistant.ai_client.get_embedding')
+    def test_retrieve_propagates_embedding_exception_and_returns_empty_string(self, mock_get_embedding):
+        from vehicles.models import VehicleDocument, DocumentChunk
+        doc = VehicleDocument.objects.create(
+            vehicle=self.vehicle,
+            file='test.pdf',
+            file_type=VehicleDocument.FileType.PDF,
+            original_filename='test.pdf',
+            extraction_status=VehicleDocument.ExtractionStatus.COMPLETED
+        )
+        DocumentChunk.objects.create(
+            document=doc,
+            chunk_index=0,
+            text='Oil type is 10W40',
+            embedding=[0.1] * 768
+        )
+
+        mock_get_embedding.side_effect = Exception("API error")
+
+        result = retrieve_relevant_document_chunks(self.vehicle.id, "oil type")
+        self.assertEqual(result, '')
+        mock_get_embedding.assert_called_once_with("oil type")

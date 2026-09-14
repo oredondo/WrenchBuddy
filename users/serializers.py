@@ -7,7 +7,8 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = ['id', 'email', 'username', 'first_name', 'last_name',
-                  'display_name', 'bio', 'location', 'avatar', 'show_spending', 'date_joined']
+                  'display_name', 'bio', 'location', 'avatar', 'show_spending',
+                  'preferred_language', 'date_joined']
         read_only_fields = ['id', 'email', 'username', 'date_joined']
 
 
@@ -16,7 +17,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'username', 'password', 'first_name', 'last_name']
+        fields = ['id', 'email', 'username', 'password', 'first_name', 'last_name', 'preferred_language']
         read_only_fields = ['id']
 
     def create(self, validated_data):
@@ -30,4 +31,5 @@ class UserCreateSerializer(serializers.ModelSerializer):
 class PublicUserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['username', 'display_name', 'bio', 'location', 'avatar', 'show_spending']
+        fields = ['username', 'display_name', 'bio', 'location', 'avatar', 'show_spending', 'preferred_language']
+

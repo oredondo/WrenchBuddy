@@ -228,3 +228,13 @@ def chat_with_tools(
         if isinstance(msg, AIMessage) and msg.content:
             return msg.content
     return 'No se pudo completar la consulta.'
+
+
+def get_structured_chain(schema: Any, prompt: Any, model: str = None) -> Any:
+    """Return a Runnable chain that takes variables, calls LLM and outputs a Pydantic object."""
+    if model is None:
+        model = getattr(settings, 'AI_TEXT_MODEL', 'leria:redacta')
+    llm = _get_llm(model, call_type='structured')
+    structured_llm = llm.with_structured_output(schema)
+    return prompt | structured_llm
+

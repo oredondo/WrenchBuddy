@@ -191,7 +191,11 @@ class TestUserSerializer:
         data = serializer.data
 
         # Assert
-        expected_fields = {'id', 'email', 'username', 'first_name', 'last_name', 'date_joined'}
+        expected_fields = {
+            'id', 'email', 'username', 'first_name', 'last_name',
+            'display_name', 'bio', 'location', 'avatar', 'show_spending',
+            'preferred_language', 'date_joined'
+        }
         assert set(data.keys()) == expected_fields
         assert data['email'] == user.email
         assert data['username'] == user.username
